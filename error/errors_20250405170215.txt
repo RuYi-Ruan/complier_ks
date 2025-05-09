@@ -1,0 +1,17 @@
+[Line 3:1] 无效Token: @
+[Line 7:1] 无效Token: 12a
+[Line 9:1] 无效Token: 1.2.3
+[Line 10:1] 无效Token: 1.2e2+3
+[Line 11:1] 无效Token: 05
+[Line 11:5] 无效Token: 34e
+[Line 13:1] 无效Token: 00.12
+[Line 15:1] 无效Token: 0x3g
+[Line 16:1] 无效Token: 0912
+[Line 17:1] 无效Token: 0712
+[Line 18:1] 无效Token: 0020
+[Line 20:1] 无效Token: 0211
+[Line 21:21] 无效Token: >==
+[Line 23:6] 无效Token: '
+[Line 24:10] 无效Token: "
+[Line 32:1] 无效Token: /*这个程序快结束了       //测试注释不闭合
+}

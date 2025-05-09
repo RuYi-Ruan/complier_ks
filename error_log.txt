@@ -1,0 +1,29 @@
+[Wed Mar 19 19:16:08 2025] Lexer Error: 'ID'
+[Wed Mar 19 19:22:37 2025] Lexer Error: 'SymbolTable' object has no attribute 'process_constant'
+[Thu Mar 20 09:00:08 2025] Lexer Error: 'gbk' codec can't encode character '\ufeff' in position 20: illegal multibyte sequence
+[Thu Mar 20 09:01:10 2025] Lexer Error: 'gbk' codec can't encode character '\ufeff' in position 20: illegal multibyte sequence
+[Thu Mar 20 09:01:39 2025] Lexer Error: 'gbk' codec can't encode character '\ufeff' in position 20: illegal multibyte sequence
+[Thu Mar 20 09:02:32 2025] Lexer Error: 'gbk' codec can't encode character '\ufeff' in position 20: illegal multibyte sequence
+[Thu Mar 20 09:46:33 2025] Lexer Error: too many values to unpack (expected 2)
+[Thu Mar 20 09:48:36 2025] Lexer Error: too many values to unpack (expected 2)
+[Thu Mar 20 09:49:15 2025] Lexer Error: too many values to unpack (expected 2)
+[Thu Mar 20 09:50:37 2025] Lexer Error: too many values to unpack (expected 2)
+[Thu Mar 20 09:56:16 2025] Lexer Error: too many values to unpack (expected 2)
+[Thu Mar 20 09:56:24 2025] Lexer Error: too many values to unpack (expected 2)
+[Thu Mar 20 09:57:41 2025] Lexer Error: too many values to unpack (expected 2)
+[Thu Mar 20 09:58:25 2025] Lexer Error: too many values to unpack (expected 2)
+[Thu Mar 20 10:16:15 2025] Lexer Error: too many values to unpack (expected 2)
+[Thu Mar 20 10:23:11 2025] Lexer Error: too many values to unpack (expected 2)
+[Thu Mar 20 10:31:02 2025] Lexer Error: too many values to unpack (expected 2)
+[Thu Mar 20 10:32:45 2025] Lexer Error: multiple repeat at position 709 (line 8, column 43)
+[Thu Mar 20 10:35:07 2025] Lexer Error: multiple repeat at position 709 (line 8, column 43)
+[Thu Mar 20 10:47:18 2025] Lexer Error: redefinition of group name 'INVALID_NUM' as group 8; was group 7 at position 145 (line 1, column 146)
+[Thu Mar 20 10:49:36 2025] Lexer Error: unbalanced parenthesis at position 238 (line 1, column 239)
+[Thu Mar 20 10:59:22 2025] Lexer Error: 'SymbolTable' object has no attribute 'symbol_table'
+[Thu Apr  3 08:55:03 2025] Lexer Error: 'SymbolEntry' object has no attribute 'error_msg'
+[Sat Apr  5 10:49:28 2025] Lexer Error: KEYWORD
+[Sat Apr  5 10:58:35 2025] Lexer Error: KEYWORD
+[Sat Apr  5 11:05:06 2025] Lexer Error: KEYWORD
+[Sat Apr  5 11:05:39 2025] Lexer Error: KEYWORD
+[Sat Apr  5 12:25:58 2025] Lexer Error: INCREMENT
+[Sun Apr  6 12:35:39 2025] Lexer Error: OPERATOR

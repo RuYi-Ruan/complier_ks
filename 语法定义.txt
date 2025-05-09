@@ -1,0 +1,170 @@
+"""
+关于布尔表达式B
+为什么！要单独提出来
+! 是一元前缀运算符，永远出现在某个布尔子表达式 最前面。
+B' 是在你已经解析完第一个子表达式之后才调用的——它是一个尾递归，用来处理后续的 二元 逻辑连接。
+如果把 ! 放到 B'，就意味着 ! 变成了一个“可以出现在关系表达式之后”的后缀或中缀符号，
+这在 C 语义上是完全错误的：你不能写 a > b ! c。
+"
+"""
+P：程序的顶层入口
+TopList: 顶层实体列表，要么由一个 Top 接着另一个 TopList 递归组成，要么为空
+Top：一个“顶层实体”，既可以是一个函数定义（FunDef），也可以是一个匿名的复合语句块
+FunDef: 函数定义
+ParamListOpt（可选参数列表）：要么是一个或多个参数 ParamList，要么完全没有参数（ε）。
+ParamList（参数列表）：由第一个参数 Param 开始，后面可以跟零个或多个以逗号分隔的更多参数（通过 ParamList’ 递归扩展）。
+ParamList’（参数列表后续）：如果当前下一个符号是逗号，就表示后面还有参数，继续 , Param 然后递归；否则结束（ε）。
+Param（单个参数）：由类型（type）加上参数名（id）组成，例如 int x。
+{ L }：函数体，内部是一系列语句 L。
+L：语句列表，由零条或多条语句组成的序列，用于顺序执行。
+S：语句，程序的基本执行单元，支持多种类型：
+S'：条件语句的可选 else 部分。
+D：变量声明
+type：数据类型
+IDList：变量列表
+IDInit：变量的初始化部分
+IDList’：变量列表的后续部分
+ForInit：for循环初始化部分
+ForIter: for循环迭代部分
+B：布尔表达式，逻辑运算表达式，支持非运算和关系表达式。
+B'：布尔表达式的后续逻辑运算部分。
+R：关系表达式
+R'：关系表达式的后续比较部分。
+E：算术表达式
+E'：算术表达式的后续加减部分。
+T：处理乘除模运算的表达式。
+T'：项的后续乘除模运算部分。
+F：表达式的最小单位。
+ArgListOpt: 可选实参列表
+ArgList：实参列表
+ArgList：后续参数
+relop：用于比较两个算术表达式的运算符。
+
+"""""""""
+P           → TopList
+
+TopList     → Top TopList
+             | ε
+
+Top         → D                         // 全局变量声明/定义
+             | FunDecl                  // 函数声明
+             | FunDef                   // 函数定义
+             | MainFunDef               // main 函数定义
+             | { L }                    // 匿名块
+
+MainFunDef  → main ( ParamListOpt ) { L }
+
+FunDecl     → type id ( ParamListOpt ) ;
+
+FunDef      → type id ( ParamListOpt ) { L }
+
+ParamListOpt→ ParamList
+             | ε
+
+ParamListOpt → ParamList
+             | ε
+
+ParamList    → Param ( "," Param )*
+
+// Param：必须写类型，标识符可写可不写
+Param        → type [ id ]
+
+
+L           → S L
+             | ε
+
+S           → ;                         // 空语句
+             | id CompAssign B ;
+             | { L }
+             | if ( B ) S S'
+             | while ( B ) S
+             | for ( ForInit ; B ; ForIter ) S
+             | do S while ( B ) ;
+             | break ;
+             | continue ;
+             | return ReturnExpr ;
+             | D                         // 局部变量声明
+
+CompAssign  → = | += | -= | *= | /= | %=
+
+S'          → else S
+             | ε
+
+// **这里 D 同时用于全局和局部声明**
+D           → type IDList ;
+
+type        → int
+             | float
+             | bool
+             | char
+             | double
+
+IDList      → id IDInit IDList’
+IDInit      → = B
+             | ε
+IDList’     → , id IDInit IDList’
+             | ε
+
+ForInit     → id = B
+             | D                         // for 循环中的声明也可
+             | ε
+
+ForIter     → id CompAssign B           // e.g. i = expr
+             | Prefix id                 // e.g. ++i, --i
+             | id Postfix                // e.g. i++, i--
+             | ε
+
+ReturnExpr  → B
+             | ε                         // 可选返回值
+
+B           → ( B ) B'
+             | ! B B'
+             | R B'
+             | Prefix B B'
+
+B'          → && B B'
+             | || B B'
+             | ε
+
+R           → E R'
+R'          → relop E R'
+             | ε
+
+E           → T E'
+E'          → + T E'
+             | - T E'
+             | ε
+
+T           → F T'
+T'          → * F T'
+             | / F T'
+             | % F T'
+             | ε
+
+F           → id ( ArgListOpt )         // 函数调用
+             | ( R )
+             | id Postfix
+             | Prefix F
+             | literal
+
+ArgListOpt  → ArgList
+             | ε
+
+ArgList     → B ArgList’
+ArgList’    → , B ArgList’
+             | ε
+
+Postfix     → ++
+             | --
+             | ε
+
+Prefix → ++
+        | --
+        | +
+        | -
+
+relop       → > | < | >= | <= | == | !=
+
+"""""""""
+
+
