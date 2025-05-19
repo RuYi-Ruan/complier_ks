@@ -1,4 +1,11 @@
 # 定义 Token 类，用于封装一个词法单元的信息
+import json
+import logging
+import os
+import sys
+from typing import Optional, List, Dict
+
+
 class Token:
     def __init__(self, line, col, token_type, value):
         # 行号和列号转换为整数
@@ -59,19 +66,119 @@ class TokenStream:
         self.current = 0
 
 
-# 判断是否符合type
-def is_type(type, value):
-    return type == "KEYWORD" and value in {"int", "float", "bool", "char", "double", "void"}
+# 判断关键字类型
+KEYWORD_TYPES = {"int", "float", "bool", "char", "double", "void"}
+
+
+def is_type(tok_type, tok_val):
+    return tok_type == "KEYWORD" and tok_val in KEYWORD_TYPES
+
+
+# 符号表条目
+class Symbol:
+    def __init__(self, kind: str, name: str, typ: str, params=None, scope_level: int = 0, line: int = 0):
+        self.kind = kind  # 'function' 或 'variable' 或 'parameter'
+        self.name = name
+        self.type = typ
+        self.params = params
+        self.scope_level = scope_level
+        self.first_line = line
+        self.count = 1
+
+    def increment(self):
+        self.count += 1
+
+
+# 符号表
+class SymbolTable:
+    def __init__(self):
+        # 全局函数表
+        self.functions: Dict[str, Symbol] = {}
+        # 变量表
+        self.vars:List[Dict[str, Symbol]] = []
+        # 变量作用域栈，每层为 dict[name->Symbol]
+        self.var_scopes: List[Dict[str, Symbol]] = []
+        self.current_level = -1
+        self.enter_scope()  # 创建全局变量作用域
+
+    def enter_scope(self):
+        self.var_scopes.append({})
+        self.current_level += 1
+
+    def exit_scope(self):
+        if self.current_level >= 0:
+            scope = self.var_scopes.pop()
+            self.vars.append(scope)
+            self.current_level -= 1
+
+    def add_function(self, name: str, return_type: str, param_types: List[str], line: int = 0):
+        if name in self.functions:
+            # TODO: 重定义或声明不一致可在此报告
+            self.functions[name].increment()
+        else:
+            sym = Symbol(kind='function', name=name, typ=return_type, params=param_types, line=line)
+            self.functions[name] = sym
+
+    def add_variable(self, name: str, var_type: str, kind: str = 'variable', line: int = 0):
+        scope = self.var_scopes[self.current_level]
+        if name in scope:
+            scope[name].increment()
+        else:
+            sym = Symbol(kind=kind, name=name, typ=var_type, scope_level=self.current_level, line=line)
+            scope[name] = sym
+
+    def dump(self, path="./output/symbol_table.json"):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data = {
+            'functions': [vars(s) for s in self.functions.values()],
+            'variables': [vars(sym) for scope in (self.vars + self.var_scopes) for sym in scope.values()]
+        }
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def lookup_function(self, name: str) -> Optional[Symbol]:
+        return self.functions.get(name)
+
+    def lookup_variable(self, name: str) -> Optional[Symbol]:
+        for lvl in range(self.current_level, -1, -1):
+            if name in self.var_scopes[lvl]:
+                return self.var_scopes[lvl][name]
+        return None
 
 
 # 语法分析器
 class SyntaxAnalyzer:
-    def __init__(self, token_file="./token/tokens.txt"):
+    def __init__(self, token_file="./token/tokens.txt",
+                 output_file="./output/syntaxTree.txt",
+                 error_file: str = "./output/syntax_errors.txt"):
+        self.error_file = error_file
+        # —— 1. 获取 logger 并清掉所有旧的 handler ——
+        self.logger = logging.getLogger("SyntaxTree")
+        self.logger.setLevel(logging.DEBUG)
+        for h in list(self.logger.handlers):
+            self.logger.removeHandler(h)
+
+        # —— 2. 新增 控制台 handler ——
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setLevel(logging.DEBUG)
+        fmt = logging.Formatter("%(message)s")
+        ch.setFormatter(fmt)
+        self.logger.addHandler(ch)
+
+        # —— 3. 新增 文件 handler，用 'w' 模式确保每次都 truncate ——
+        fh = logging.FileHandler(output_file, mode="w", encoding='utf-8')
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(fmt)
+        self.logger.addHandler(fh)
+
         self.tok = TokenStream(token_file)
         self.current_token = None
         self.indent = 0
         self.errors = []  # 用来收集错误
         self.last_token = None  # 记录上一个消费的 token,用于指定错误语句的行号
+
+        # --- 符号表 ---
+        self.symtab = SymbolTable()
 
     def peek_n(self, n=0):
         """
@@ -85,10 +192,10 @@ class SyntaxAnalyzer:
     def _peek_third(self):
         """返回当前单词的后一个单词"""
 
-
     # 语法树缩进
     def _log(self, msg):
-        print("--" * self.indent + msg)
+        line = "--" * self.indent + msg
+        self.logger.debug(line)
 
     # 进入某个文法时打印
     def _enter(self, name):
@@ -146,6 +253,8 @@ class SyntaxAnalyzer:
 
     # 语法分析入口
     def parse(self):
+        # —— 在真正解析前，先把旧的错误文件清空 ——
+        open(self.error_file, 'w', encoding='utf-8').close()
         # 开始分析
         self.current_token = self.tok.next()
         try:
@@ -157,10 +266,12 @@ class SyntaxAnalyzer:
             self.report_error(f"Extra input after end of top-level block: {self.current_token}")
 
         print("—— 解析结束 ——")
-        if self.errors:
-            print("发现以下语法错误：")
+
+        # —— 在这里一次性把 errors 写到文件 ——
+        with open(self.error_file, "w", encoding="utf-8") as f:
             for e in self.errors:
-                print(" ", e)
+                f.write(e + "\n")
+        self.symtab.dump()
 
     # P → TopList
     def parse_P(self):
@@ -196,10 +307,13 @@ class SyntaxAnalyzer:
                     or (is_type(self.current_token.type, self.current_token.value) and
                         self.peek_n().value == "main")):
                 self._enter("main 函数")
-
+                ret_type = self.current_token.value
                 if self.current_token.type == "KEYWORD":
                     self.match("KEYWORD")
+                line = self.current_token.line
                 self.match("IDENTIFIER", "main")
+                self.symtab.enter_scope()
+                self.symtab.add_function(name="main", param_types=[], return_type=ret_type, line=line)
                 self.match("OPERATOR", "(")
                 self.parse_ParamListOpt()
                 self.match("OPERATOR", ")")
@@ -207,6 +321,8 @@ class SyntaxAnalyzer:
                     self.match("DELIMITER", "{")
                     self.parse_L()
                     self.match("DELIMITER", "}")
+
+                    self.symtab.exit_scope()
                     self._exit("main 函数")
                     return
                 else:
@@ -235,9 +351,11 @@ class SyntaxAnalyzer:
 
             elif self.current_token.type == "DELIMITER" and self.current_token.value == "{":
                 self._enter("块")
+                self.symtab.enter_scope()
                 self.match("DELIMITER", "{")
                 self.parse_L()
                 self.match("DELIMITER", "}")
+                self.symtab.exit_scope()
                 self._exit("块")
                 return
         else:
@@ -247,10 +365,24 @@ class SyntaxAnalyzer:
     def parse_FunDef(self):
         if is_type(self.current_token.type, self.current_token.value):
             self._enter("函数定义")
+            # 收集函数类型
+            func_type = self.current_token.value
             self.match("KEYWORD")
+            # 收集函数名称
+            func_name = self.current_token.value
             self.match("IDENTIFIER")
+            #  默认只收集类型签名
+            self.symtab.add_function(name=func_name, return_type=func_type, param_types=[], line=self.current_token.line)
+
+            # 作用域层级 + 1
+            self.symtab.enter_scope()
+
             self.match("OPERATOR", "(")
-            self.parse_ParamListOpt()
+            # TODO: 后续应收集函数参数
+            params = self.collect_params()
+            # self.parse_ParamListOpt()
+            # 更新函数签名
+            self.symtab.functions[func_name].params = [f"{ptype} {pname} " for ptype, pname, _ in params]
             self.match("OPERATOR", ")")
 
             if self.current_token and self.current_token.type == "DELIMITER" and self.current_token.value == ";":
@@ -258,13 +390,39 @@ class SyntaxAnalyzer:
                 self.match("DELIMITER", ";")  # 函数声明
                 self._exit("函数声明")
             elif self.current_token and self.current_token.type == "DELIMITER" and self.current_token.value == "{":
+                # 如果是函数定义则需要将函数中的参数加入符号表
+                for ptype, pname, pline in params:
+                    if pname is not None:
+                        self.symtab.add_variable(name=pname,
+                                                 var_type=ptype,
+                                                 kind='parameter',
+                                                 line=pline)
                 self.match("DELIMITER", "{")
                 self.parse_L()
                 self.match("DELIMITER", "}")
             else:
                 self.error("Expected ';' or '{' after function signature", use_token=self.current_token)
+
+            # 作用域层级 - 1
+            self.symtab.exit_scope()
             self._exit("函数定义")
             return
+
+    def collect_params(self):
+        params = []
+        if is_type(self.current_token.type, self.current_token.value):
+            while True:
+                ptype = self.current_token.value
+                self.match('KEYWORD')
+                pname = None
+                pline = self.current_token.line
+                if self.current_token.type == 'IDENTIFIER':
+                    pname = self.current_token.value
+                    self.match('IDENTIFIER')
+                params.append((ptype, pname, pline))
+                if self.current_token.value != ',': break
+                self.match('DELIMITER', ',')
+        return params
 
     #   ParamListOpt → ParamList | ε
     def parse_ParamListOpt(self):
@@ -282,12 +440,9 @@ class SyntaxAnalyzer:
             self.match("DELIMITER", ",")
             self.parse_Param()
 
-
-
     # Param → type [ id ]
     def parse_Param(self):
         self._enter("参数")
-        # 一定要有类型
         self.match("KEYWORD")
         # 如果后面是标识符，再把它吃掉；否则跳过
         if self.current_token and self.current_token.type == "IDENTIFIER":
@@ -376,7 +531,13 @@ class SyntaxAnalyzer:
 
         # 块语句
         elif self.current_token.type == "DELIMITER" and self.current_token.value == "{":
-            self.parse_P()
+            # 1) 进入新块作用域
+            self.symtab.enter_scope()
+            self.match("DELIMITER", "{")
+            self.parse_L()
+            self.match("DELIMITER", "}")
+            # 2) 退出新块作用域
+            self.symtab.exit_scope()
             return
 
         # if 语句
@@ -455,7 +616,7 @@ class SyntaxAnalyzer:
             self._exit("return语句")
             return
         # 变量声明语句（type 开头）
-        elif (is_type(self.current_token.type, self.current_token.value)):
+        elif is_type(self.current_token.type, self.current_token.value):
             self.parse_D()
         else:
             self.error("Expected assignment, block, if, or declaration statement")
@@ -478,6 +639,7 @@ class SyntaxAnalyzer:
          | id Postfix           // e.g. i++, i--
          | ε
     """
+
     def parse_ForIter(self):
         """ForIter → id CompAssign B | Prefix id | id Postfix | ε"""
         # 1) 赋值迭代：id CompAssign B
@@ -525,7 +687,7 @@ class SyntaxAnalyzer:
     def parse_D(self):
         self._enter("声明语句")
         self.parse_type()
-        self.parse_IDList()
+        self.parse_IDList(self.current_token.type)
         self.match("DELIMITER", ";")
         self._exit("声明语句")
 
@@ -538,11 +700,15 @@ class SyntaxAnalyzer:
             self.error("Expected type keyword (int, float, bool, char, double)")
 
     # IDList → id IDInit IDList'
-    def parse_IDList(self):
+    def parse_IDList(self, var_type):
         self._enter("标识符")
+        # 第一个变量名称
+        var_name = self.current_token.value
+        line = self.current_token.line
+        self.symtab.add_variable(var_name, var_type, kind='variable', line=line)
         self.match("IDENTIFIER")
         self.parse_IDInit()
-        self.parse_IDListTail()
+        self.parse_IDListTail(var_type)
         self._exit("标识符")
 
     # IDInit → = B | ε
@@ -552,13 +718,17 @@ class SyntaxAnalyzer:
             self.match("OPERATOR", "=")
             self.parse_B()
             self._exit("初始化")
-        # ε 情况无需处理（可选）
+        # ε 情况无需处理
 
     # IDList' → , id IDInit IDList' | ε
-    def parse_IDListTail(self):
+    def parse_IDListTail(self, var_type):
         while self.current_token and self.current_token.type == "DELIMITER" and self.current_token.value == ",":
             self._enter("继续声明")
             self.match("DELIMITER", ",")
+            # 添加后续变量
+            vname = self.current_token.value
+            line = self.current_token.line
+            self.symtab.add_variable(vname, var_type, kind='variable', line=line)
             self.match("IDENTIFIER")
             self.parse_IDInit()
             self._exit("继续声明")
@@ -718,6 +888,9 @@ class SyntaxAnalyzer:
         # 标识符，可能带后缀自增/自减
         elif self.current_token.type == "IDENTIFIER":
             self.match("IDENTIFIER")
+
+            name = self.current_token.value
+
             # Postfix 可选
             if (self.current_token.type == "OPERATOR"
                     and self.current_token.value in ("++", "--")):

@@ -1,0 +1,71 @@
+{
+  "functions": [
+    {
+      "kind": "function",
+      "name": "isPrime",
+      "type": "int",
+      "params": [
+        "int x "
+      ],
+      "scope_level": 0,
+      "first_line": 3,
+      "count": 2
+    },
+    {
+      "kind": "function",
+      "name": "main",
+      "type": "int",
+      "params": [],
+      "scope_level": 0,
+      "first_line": 5,
+      "count": 1
+    }
+  ],
+  "variables": [
+    {
+      "kind": "variable",
+      "name": "num",
+      "type": "IDENTIFIER",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 7,
+      "count": 1
+    },
+    {
+      "kind": "variable",
+      "name": "res",
+      "type": "IDENTIFIER",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 8,
+      "count": 1
+    },
+    {
+      "kind": "parameter",
+      "name": "x",
+      "type": "int",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 21,
+      "count": 1
+    },
+    {
+      "kind": "variable",
+      "name": "i",
+      "type": "IDENTIFIER",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 23,
+      "count": 1
+    },
+    {
+      "kind": "variable",
+      "name": "yes",
+      "type": "IDENTIFIER",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 24,
+      "count": 1
+    }
+  ]
+}

@@ -9,7 +9,6 @@ main(){
     int M = read() ;
     a = sum(max(M,N),100) ;
     write(a);
-
 }
 
 int sum(int sum_x,int sum_y){

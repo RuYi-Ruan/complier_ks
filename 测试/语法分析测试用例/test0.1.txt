@@ -7,4 +7,4 @@ main() {
        write(x);
        write(y);
        write(z);
-       }
+}

@@ -131,6 +131,9 @@ def save_analysis_results(tokens, errors):
 class CompilerIDE(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.show_source_action = None
+        self.show_analysis_action = None
+        self.show_console_action = None
         self.setWindowTitle("C语言编译器")
         self.setup_ui()
         self.connect_actions()
@@ -139,14 +142,27 @@ class CompilerIDE(QMainWindow):
     def setup_ui(self):
         # 创建菜单栏
         menu_bar = self.menuBar()
-        self.setup_menu()  # 设置自定义的菜单选项
-        menu_bar.addMenu("语法分析")  # 添加“语法分析”菜单
+        file_menu = menu_bar.addMenu("文件")
+        self.open_action = QAction("打开", self)
+        self.save_action = QAction("保存", self)
+        file_menu.addAction(self.open_action)
+        file_menu.addAction(self.save_action)
+
+        # 词法分析与语法分析放到各自一级菜单
+        self.lex_action = QAction("词法分析", self)
+        menu_bar.addAction(self.lex_action)
+
+        self.syntax_action = QAction("语法分析", self)
+        menu_bar.addAction(self.syntax_action)
+
         edit_menu = menu_bar.addMenu("编辑")  # 添加“编辑”菜单
         view_menu = menu_bar.addMenu("视图")  # 添加“视图”菜单
         menu_bar.addMenu("中间代码")  # 添加“中间代码”菜单
         menu_bar.addMenu("目标代码")  # 添加“目标代码”菜单
         menu_bar.addMenu("相关算法")  # 添加“相关算法”菜单
         menu_bar.addMenu("关于")  # 添加“关于”菜单
+
+
 
         # 创建“编辑”菜单项
         copy_action = QAction("复制", self)  # 创建复制动作
@@ -318,28 +334,17 @@ class CompilerIDE(QMainWindow):
         else:
             self.right_splitter.setSizes([1, 0])  # 如果不显示控制台输出区
 
-    # 导航栏
-    def setup_menu(self):
-        menubar = self.menuBar()
-
-        # 文件菜单
-        file_menu = menubar.addMenu("文件")
-        self.open_action = QAction("打开", self)  # 保存为实例变量
-        self.save_action = QAction("保存", self)
-        file_menu.addAction(self.open_action)
-        file_menu.addAction(self.save_action)
-
-        # 词法分析菜单
-        analysis_menu = menubar.addMenu("词法分析")
-        self.lex_action = QAction("执行分析", self)
-        analysis_menu.addAction(self.lex_action)
-
     # 文件操作
     def connect_actions(self):
         # 直接使用保存的动作实例
+        # 打开文件
         self.open_action.triggered.connect(self.open_file)
+        # 保存文件
         self.save_action.triggered.connect(self.save_file)
+        # 词法分析
         self.lex_action.triggered.connect(self.run_lexical_analysis)
+        # 语法分析
+        self.syntax_action.triggered.connect(self.run_syntax_analysis)
 
     def open_file(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -388,7 +393,53 @@ class CompilerIDE(QMainWindow):
 
     # 执行语法分析
     def run_syntax_analysis(self):
-        pass
+        """
+        先做词法，然后做语法，把语法树从 syntaxTree.txt
+        显示到右侧分析区，把语法错误从 syntax_errors.txt
+        显示到控制台区。
+        """
+        try:
+            # --- 1. 词法分析 ---
+            code = self.text_edit_top.toPlainText()
+            lexer = Lexer()
+            tokens, lex_errors = lexer.tokenize(code)
+            save_analysis_results(tokens, lex_errors)
+
+            # --- 2. 语法分析 ---
+            from syntax_analyzer import SyntaxAnalyzer
+            sa = SyntaxAnalyzer()
+            sa.parse()
+
+            # --- 3. 显示语法树 ---
+            with open("./output/syntaxTree.txt", "r", encoding="utf-8") as f:
+                tree_txt = f.read()
+            self.text_edit_right.clear()
+            self.text_edit_right.setPlainText(tree_txt)
+
+            # --- 4. 显示语法错误 ---
+            errs_path = "./output/syntax_errors.txt"
+            self.text_edit_bottom.clear()
+            if os.path.exists(errs_path):
+                with open(errs_path, "r", encoding="utf-8") as f:
+                    lines = [l.rstrip() for l in f if l.strip()]
+                if lines:
+                    for line in lines:
+                        self.text_edit_bottom.setTextColor(QColor("red"))
+                        self.text_edit_bottom.append(line)
+                    self.text_edit_bottom.append(f"共发现 {len(lines)} 个语法错误")
+                else:
+                    self.text_edit_bottom.setTextColor(QColor("#008800"))
+                    self.text_edit_bottom.append("语法分析完毕，发现 0 个错误")
+            else:
+                # 如果文件都没生成，也当作 0 错误
+                self.text_edit_bottom.setTextColor(QColor("#008800"))
+                self.text_edit_bottom.append("语法分析完毕，发现 0 个错误")
+
+        except Exception as e:
+            # 万一有异常，也展示在控制台区
+            self.text_edit_bottom.clear()
+            self.text_edit_bottom.setTextColor(QColor("#D8000C"))
+            self.text_edit_bottom.append(f"语法分析异常：{e}")
 
     # 展示分析结果 -- token表
     def display_tokens(self, tokens):
