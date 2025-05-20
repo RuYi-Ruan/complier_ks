@@ -1,0 +1,1 @@
+[Warning] Variable 'b' declared at line 4 but never used

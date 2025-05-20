@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import sys
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple, Union
 
 
 class Token:
@@ -67,7 +67,7 @@ class TokenStream:
 
 
 # 判断关键字类型
-KEYWORD_TYPES = {"int", "float", "bool", "char", "double", "void"}
+KEYWORD_TYPES = {"int", "float", "bool", "char", "double", "void", "const"}
 
 
 def is_type(tok_type, tok_val):
@@ -76,7 +76,9 @@ def is_type(tok_type, tok_val):
 
 # 符号表条目
 class Symbol:
-    def __init__(self, kind: str, name: str, typ: str, params=None, scope_level: int = 0, line: int = 0):
+    def __init__(self, kind: str, name: str, typ: str,
+                 params=None, scope_level: int = 0, line: int = 0,
+                 is_defined: bool = False):
         self.kind = kind  # 'function' 或 'variable' 或 'parameter'
         self.name = name
         self.type = typ
@@ -84,6 +86,7 @@ class Symbol:
         self.scope_level = scope_level
         self.first_line = line
         self.count = 1
+        self.is_defined = is_defined # 函数是否有函数体(定义)
 
     def increment(self):
         self.count += 1
@@ -95,7 +98,7 @@ class SymbolTable:
         # 全局函数表
         self.functions: Dict[str, Symbol] = {}
         # 变量表
-        self.vars:List[Dict[str, Symbol]] = []
+        self.vars: List[Dict[str, Symbol]] = []
         # 变量作用域栈，每层为 dict[name->Symbol]
         self.var_scopes: List[Dict[str, Symbol]] = []
         self.current_level = -1
@@ -111,15 +114,38 @@ class SymbolTable:
             self.vars.append(scope)
             self.current_level -= 1
 
-    def add_function(self, name: str, return_type: str, param_types: List[str], line: int = 0):
-        if name in self.functions:
-            # TODO: 重定义或声明不一致可在此报告
-            self.functions[name].increment()
+    def add_function(self, name: str, return_type: str,
+                     param_types: List[str], line: int = 0,
+                     is_definition: bool = False):
+        existing = self.functions.get(name)
+
+        # —— 不允许与变量同名 ——
+        for scope in self.var_scopes:
+            if name in scope:
+                raise Exception(f"[Semantic Error] Function '{name}' conflicts with variable name at line {line}")
+
+        if existing:
+            # —— 重复声明检查 ——
+            if existing.is_defined and is_definition:
+                # 已经定义过，再定义就错
+                raise Exception(f"[Semantic Error] Function '{name}' redefined at line {line}")
+            if not existing.is_defined and not is_definition:
+                # 已声明又声明，可以忽略或报重复声明
+                self.functions[name].increment()
+                raise Exception(f"[Semantic Error] Function  redeclared at line {line}")
+            # 存在声明添加定义
+            existing.is_defined = True
         else:
-            sym = Symbol(kind='function', name=name, typ=return_type, params=param_types, line=line)
+            sym = Symbol(kind='function', name=name, typ=return_type,
+                         params=param_types, line=line,
+                         is_defined=is_definition)
             self.functions[name] = sym
 
     def add_variable(self, name: str, var_type: str, kind: str = 'variable', line: int = 0):
+        # —— 不允许与函数同名 ——
+        if name in self.functions:
+            raise Exception(f"[Semantic Error] Variable '{name}' conflicts with function name at line {line}")
+
         scope = self.var_scopes[self.current_level]
         if name in scope:
             scope[name].increment()
@@ -144,6 +170,10 @@ class SymbolTable:
             if name in self.var_scopes[lvl]:
                 return self.var_scopes[lvl][name]
         return None
+
+    def lookup_var_in_current_scope(self, name: str) -> Optional[Symbol]:
+        """只在当前作用域查找，检测重定义"""
+        return self.var_scopes[self.current_level].get(name)
 
 
 # 语法分析器
@@ -188,9 +218,6 @@ class SyntaxAnalyzer:
         依此类推
         """
         return self.tok.peek(n)
-
-    def _peek_third(self):
-        """返回当前单词的后一个单词"""
 
     # 语法树缩进
     def _log(self, msg):
@@ -251,7 +278,27 @@ class SyntaxAnalyzer:
                 return
             self.current_token = self.tok.next()
 
-    # 语法分析入口
+    # 检查变量是否重定义
+    def check_var_redefine(self, var_name: str, var_type: str, line):
+        # —— 语义动作：同一作用域重定义检测 ——
+        if self.symtab.lookup_var_in_current_scope(var_name):
+            # 同一层已有同名变量，报错但继续解析
+            self.report_error(f"[Semantic Error] Variable '{var_name}' redeclared in the same scope at line {line}")
+            return True
+        return False
+
+    def type_compatible(self, declared: str, actual: str) -> bool:
+        # 简单规则：同名、int->float 允许，其它都不行
+        if declared == actual:
+            return True
+        if declared == "float" and actual == "int":
+            return True
+        return False
+
+    """
+    下面是语法分析模块，采用递归下降，parse为入口函数
+    """
+
     def parse(self):
         # —— 在真正解析前，先把旧的错误文件清空 ——
         open(self.error_file, 'w', encoding='utf-8').close()
@@ -265,8 +312,23 @@ class SyntaxAnalyzer:
         if self.current_token is not None:
             self.report_error(f"Extra input after end of top-level block: {self.current_token}")
 
-        print("—— 解析结束 ——")
+        # —— 在这里做 main 函数存在性检查 ——
+        main_sym = self.symtab.lookup_function("main")
 
+        if not main_sym or not main_sym.is_defined:
+            # 如果既没声明也没定义，或者只声明没定义，都算缺 main
+            self.report_error("[Semantic Error] Missing 'main' function")
+
+        # 在写入 errors 文件之前，加上未使用变量的警告
+        for scope in self.symtab.var_scopes + self.symtab.vars:
+            for sym in scope.values():
+                # 只检查普通变量（不包括参数、常量、函数名冲突等）
+                if sym.kind == 'variable' and sym.count == 1:
+                    self.report_error(
+                        f"[Warning] Variable '{sym.name}' declared at line {sym.first_line} but never used"
+                    )
+
+        print("—— 解析结束 ——")
         # —— 在这里一次性把 errors 写到文件 ——
         with open(self.error_file, "w", encoding="utf-8") as f:
             for e in self.errors:
@@ -313,7 +375,9 @@ class SyntaxAnalyzer:
                 line = self.current_token.line
                 self.match("IDENTIFIER", "main")
                 self.symtab.enter_scope()
-                self.symtab.add_function(name="main", param_types=[], return_type=ret_type, line=line)
+                # main 一定是定义（有函数体），标记 is_definition=True
+                self.symtab.add_function(name="main", param_types=[], return_type=ret_type,
+                                        line = line, is_definition = True)
                 self.match("OPERATOR", "(")
                 self.parse_ParamListOpt()
                 self.match("OPERATOR", ")")
@@ -330,6 +394,12 @@ class SyntaxAnalyzer:
                 return
 
             elif is_type(self.current_token.type, self.current_token.value):
+                # —— 可选 const 前缀 ——
+                is_const = False
+                if self.current_token.type == "KEYWORD" and self.current_token.value == "const":
+                    is_const = True
+                    self.match("KEYWORD", "const")
+
                 # 需要区分是函数声明还是全局变量声明,向后提前查看两个单词
                 # 全局变量声明 int a = 1; 函数 int a() {} | ;
                 # 看下 3 个 token：type, id, 第三个 token
@@ -341,7 +411,7 @@ class SyntaxAnalyzer:
                     if t3.value == "(":  # int a ( …  → 函数声明/定义
                         self.parse_FunDef()
                     elif t3.value in ("=", ";", ","):  # int a = …; 或 int a; → 变量声明
-                        self.parse_D()
+                        self.parse_D(is_const = is_const)
                     else:
                         self.error(f"Unexpected token {t3} after type+id")
                 else:
@@ -371,8 +441,6 @@ class SyntaxAnalyzer:
             # 收集函数名称
             func_name = self.current_token.value
             self.match("IDENTIFIER")
-            #  默认只收集类型签名
-            self.symtab.add_function(name=func_name, return_type=func_type, param_types=[], line=self.current_token.line)
 
             # 作用域层级 + 1
             self.symtab.enter_scope()
@@ -381,12 +449,15 @@ class SyntaxAnalyzer:
             # TODO: 后续应收集函数参数
             params = self.collect_params()
             # self.parse_ParamListOpt()
-            # 更新函数签名
-            self.symtab.functions[func_name].params = [f"{ptype} {pname} " for ptype, pname, _ in params]
+
             self.match("OPERATOR", ")")
 
             if self.current_token and self.current_token.type == "DELIMITER" and self.current_token.value == ";":
                 self._enter("函数声明")
+                self.symtab.add_function(name=func_name, return_type=func_type, param_types=[],
+                                         line=self.current_token.line, is_definition=False)
+                # 更新函数签名
+                self.symtab.functions[func_name].params = [f"{ptype} {pname} " for ptype, pname, _ in params]
                 self.match("DELIMITER", ";")  # 函数声明
                 self._exit("函数声明")
             elif self.current_token and self.current_token.type == "DELIMITER" and self.current_token.value == "{":
@@ -397,6 +468,10 @@ class SyntaxAnalyzer:
                                                  var_type=ptype,
                                                  kind='parameter',
                                                  line=pline)
+                self.symtab.add_function(name=func_name, return_type=func_type, param_types=[],
+                                         line=self.current_token.line, is_definition=True)
+                # 更新函数签名
+                self.symtab.functions[func_name].params = [f"{ptype} {pname} " for ptype, pname, _ in params]
                 self.match("DELIMITER", "{")
                 self.parse_L()
                 self.match("DELIMITER", "}")
@@ -517,17 +592,24 @@ class SyntaxAnalyzer:
         # 赋值语句
         elif self.current_token.type == "IDENTIFIER":
             self._enter("赋值语句")
+            lhs_name = self.current_token.value
+            line = self.current_token.line
             self.match("IDENTIFIER")
-            if (self.current_token is not None and
-                    self.current_token.type == "OPERATOR" and
-                    self.current_token.value in {"=", "+=", "-=", "*=", "/=", "%="}):
-                self.match("OPERATOR")
-                self.parse_B()
+            # 检查是否为常量，如果为常量则不能赋值
+            sym = self.symtab.lookup_variable(lhs_name)
+            if sym and sym.kind == "CONST":
+                self.report_error(f"[Semantic Error] Cannot assign to constant '{lhs_name}' at line {line}")
+            # 检查左值是否已声明
+            if not self.symtab.lookup_variable(lhs_name):
+                self.report_error(
+                    f"[Semantic Error] Assignment to undeclared variable '{lhs_name}' at line {self.last_token.line}")
+            if self.current_token.type == "OPERATOR" and self.current_token.value == "=":
+                self.match("OPERATOR", "=")
+                rhs_type = self.parse_B()
                 self.match("DELIMITER", ";")
-                self._exit("赋值语句")
             else:
-                self.error("Expected assignment operator (=, +=, -=, *=, /=, %=)")
-            return
+                self.error("Expected assignment operator …")
+            self._exit("赋值语句")
 
         # 块语句
         elif self.current_token.type == "DELIMITER" and self.current_token.value == "{":
@@ -683,42 +765,59 @@ class SyntaxAnalyzer:
                  or self.current_token.type in ("IDENTIFIER", "LITERAL"))):
             self.parse_B()
 
-    # D → type IDList ;
-    def parse_D(self):
+    # D → ConstOpt type IDList ;
+    # ConstOpt -> const | ε
+    def parse_D(self,  is_const: bool = False):
         self._enter("声明语句")
-        self.parse_type()
-        self.parse_IDList(self.current_token.type)
+
+        var_type = self.parse_type()  # ← 把类型记下来
+        # 把 const 信息也传下去
+        self.parse_IDList(var_type, is_const)
         self.match("DELIMITER", ";")
         self._exit("声明语句")
 
-    def parse_type(self):
+    # 处理类型
+    def parse_type(self) -> str:
         if is_type(self.current_token.type, self.current_token.value):
+            t = self.current_token.value
             self._enter("类型")
-            self.match("KEYWORD")  # 匹配 type
+            self.match("KEYWORD")  # 吃掉 type
             self._exit("类型")
+            return t
         else:
-            self.error("Expected type keyword (int, float, bool, char, double)")
+            self.error("Expected type keyword", use_token=self.current_token)
 
     # IDList → id IDInit IDList'
-    def parse_IDList(self, var_type):
+    def parse_IDList(self, var_type, is_const: bool = False):
         self._enter("标识符")
         # 第一个变量名称
         var_name = self.current_token.value
         line = self.current_token.line
-        self.symtab.add_variable(var_name, var_type, kind='variable', line=line)
+        # 语义动作：检查同意作用域变量重定义
+        if not self.check_var_redefine(var_name=var_name, var_type=var_type, line=line):
+            # 类型有效性（一般不必，因为类型是从 KEYWORD 来的）
+            self.symtab.add_variable(var_name, var_type,
+                                     kind='CONST' if is_const else "variable",
+                                     line=line)
+
         self.match("IDENTIFIER")
-        self.parse_IDInit()
+        # 传入 var_name 和 var_type
+        self.parse_IDInit(var_name, var_type)
         self.parse_IDListTail(var_type)
         self._exit("标识符")
 
     # IDInit → = B | ε
-    def parse_IDInit(self):
-        if self.current_token and self.current_token.type == "OPERATOR" and self.current_token.value == "=":
+    #   在这里做类型兼容检查
+    def parse_IDInit(self, var_name: str, var_type: str):
+        if self.current_token and self.current_token.value == "=":
             self._enter("初始化")
             self.match("OPERATOR", "=")
-            self.parse_B()
+            rhs_type, _ = self.parse_B()  # ← 解包类型/值
+            if not self.type_compatible(var_type, rhs_type):
+                self.report_error(
+                    f"[Semantic Error] Cannot initialize '{var_name}' of type '{var_type}' with '{rhs_type}' at line {self.current_token.line}"
+                )
             self._exit("初始化")
-        # ε 情况无需处理
 
     # IDList' → , id IDInit IDList' | ε
     def parse_IDListTail(self, var_type):
@@ -728,7 +827,9 @@ class SyntaxAnalyzer:
             # 添加后续变量
             vname = self.current_token.value
             line = self.current_token.line
-            self.symtab.add_variable(vname, var_type, kind='variable', line=line)
+            # 进行重定义检查
+            if not self.check_var_redefine(vname, var_type, line):
+                self.symtab.add_variable(vname, var_type, kind='variable', line=line)
             self.match("IDENTIFIER")
             self.parse_IDInit()
             self._exit("继续声明")
@@ -746,163 +847,226 @@ class SyntaxAnalyzer:
         # 否则什么都不做（ε）
 
     # B → ( B ) B' | !B B' | R B'
-    def parse_B(self):
+    def parse_B(self) -> Tuple[str, Optional[Union[int, float]]]:
+        """布尔表达式，返回 (类型, 常量值)；常量值对逻辑表达式总是 None。"""
         self._enter("布尔表达式")
-        # 先处理布尔分组
-        # 如果是 '(' 开头，就把整个 B 包在里面
-        if (self.current_token.type == "OPERATOR"
-                and self.current_token.value == "("):
+        # 先处理布尔分组和一元 !
+        if self.current_token.type == "OPERATOR" and self.current_token.value == "(":
             self.match("OPERATOR", "(")
-            self.parse_B()
+            t, _ = self.parse_B()
             self.match("OPERATOR", ")")
-        # 一元运算符 ‘!’
-        elif (self.current_token.type == "OPERATOR"
-              and self.current_token.value == "!"):
+            v = None
+        elif self.current_token.type == "OPERATOR" and self.current_token.value == "!":
             self.match("OPERATOR", "!")
-            self.parse_B()
-        # 否则走关系表达式
+            t, _ = self.parse_B()
+            if t != 'bool':
+                self.report_error(
+                    f"[Semantic] '!' operand must be bool, got {t} at line {self.last_token.line}"
+                )
+            t = 'bool'
+            v = None
         else:
-            self.parse_R()
+            t, _ = self.parse_R()
+            v = None
 
-        # 然后匹配零次或多次的 && 或 ||
-        self.parse_B_prime()
-        self._exit("布尔表达式")
-
-    # B' → && B B' | || B B' | ε
-    def parse_B_prime(self):
-        self._enter("布尔表达式'")
+        # 处理 && 和 ||
         while (self.current_token
                and self.current_token.type == "OPERATOR"
                and self.current_token.value in ("&&", "||")):
             op = self.current_token.value
             self.match("OPERATOR", op)
-            # 这里必须用 parse_B()，而不是 parse_R()
-            # 因为后面可能是 ! 前缀，或嵌套的逻辑连接
-            self.parse_B()
-        self._exit("布尔表达式'")
+            rhs_t, _ = self.parse_B()
+            if t != 'bool' or rhs_t != 'bool':
+                self.report_error(
+                    f"[Semantic] logical '{op}' requires bool operands, got {t} and {rhs_t}"
+                )
+            t = 'bool'
+            v = None
+
+        self._exit("布尔表达式")
+        return t, v
 
     # R → E R'
-    def parse_R(self):
-        self._enter("关系表达式")
-        self.parse_E()
-        self.parse_R_prime()
-        self._exit("关系表达式")
-
     # R' → relop E R' | ε
-    def parse_R_prime(self):
-        self._enter("关系表达式'")
-        # 只要下一个 token 是关系运算符就循环
+    def parse_R(self) -> Tuple[str, Optional[Union[int, float]]]:
+        """关系表达式，返回 (类型, 常量值)；链式比较总是常量值 None。"""
+        self._enter("关系表达式")
+        # 先拿到左侧算术 expr
+        lt, lv = self.parse_E()
+        saw_relop = False
+
+        # 处理一个或多个 relop E
         while (self.current_token
                and self.current_token.type == "OPERATOR"
                and self.current_token.value in (">", "<", ">=", "<=", "==", "!=")):
-            rel = self.current_token.value
-            self.match("OPERATOR", rel)
-            self.parse_E()
-        self._exit("关系表达式'")
+            saw_relop = True
+            op = self.current_token.value
+            self.match("OPERATOR", op)
+            rt, _ = self.parse_E()
+            if lt not in ("int", "float") or rt not in ("int", "float"):
+                self.report_error(
+                    f"[Semantic] relational '{op}' requires numeric operands, got {lt} and {rt}"
+                )
+            # 为了支持 a < b < c 链式比较，我们把 lt 更新为 rt
+            lt, lv = rt, None
+
+        self._exit("关系表达式")
+
+        # 如果至少出现一次关系运算，结果是 bool，且不是编译期常量
+        if saw_relop:
+            return "bool", None
+        # 否则就退回单纯的算术表达式
+        return lt, lv
 
     # E → T E'
-    def parse_E(self):
-        self._enter("算术表达式")
-        self.parse_T()
-        self.parse_E_prime()
-        self._exit("算术表达式")
-
     # E' → + T E' | - T E' | ε
-    def parse_E_prime(self):
-        self._enter("算术表达式'")
+    def parse_E(self) -> Tuple[str, Optional[Union[int, float]]]:
+        self._enter("算术表达式")
+        lt, lv = self.parse_T()
         while (self.current_token
                and self.current_token.type == "OPERATOR"
                and self.current_token.value in ("+", "-")):
             op = self.current_token.value
             self.match("OPERATOR", op)
-            self.parse_T()
-        self._exit("算术表达式'")
+            rt, rv = self.parse_T()
+            # 类型提升
+            tt = 'float' if 'float' in (lt, rt) else 'int'
+            # 常量折叠
+            if lv is not None and rv is not None:
+                lv = lv + rv if op == "+" else lv - rv
+            else:
+                lv = None
+            lt = tt
+        self._exit("算术表达式")
+        return lt, lv
 
     # T → F T'
-    def parse_T(self):
-        self._enter("项")
-        self.parse_F()
-        self.parse_T_prime()
-        self._exit("项")
-
     # T' → * F T' | / F' | ε
-    def parse_T_prime(self):
-        self._enter("项'")
+    # T → F T'
+    # 改成返回 (类型, 常量值)
+    def parse_T(self) -> Tuple[str, Optional[Union[int, float]]]:
+        self._enter("项")
+        # 先拿到 F 的 (类型, 常量值)
+        lt, lv = self.parse_F()
+        # 然后逐个处理 * / %
         while (self.current_token
                and self.current_token.type == "OPERATOR"
                and self.current_token.value in ("*", "/", "%")):
             op = self.current_token.value
             self.match("OPERATOR", op)
-            self.parse_F()
-        self._exit("项'")
+            rt, rv = self.parse_F()
+            # 除法／取余前做零检查
+            if op in ("/", "%") and rv == 0:
+                self.report_error(
+                    f"[Semantic Error] Division or modulo by zero at line {self.last_token.line}"
+                )
+            # 类型提升
+            tt = 'float' if 'float' in (lt, rt) else 'int'
+            # 常量折叠
+            if lv is not None and rv is not None:
+                if op == "*":
+                    lv = lv * rv
+                elif op == "/":
+                    lv = lv / rv
+                else:
+                    lv = lv % rv
+            else:
+                lv = None
+            lt = tt
+        self._exit("项")
+        return lt, lv
 
     """
     F   → id ( ArgListOpt ) ;
     | ( R ) 
     | id Postfix 
-    | Prefix id 
+    | Prefdaoix id 
     | literal
     Postfix → ++ | -- | ε
     Prefix  → ++ | -- | + | - 
     """
 
-    def parse_F(self):
+    def parse_F(self) -> Tuple[str, Optional[Union[int, float]]]:
+        """因子，返回 (类型, 常量值或 None)。"""
         self._enter("因子")
-        # 一元 + / - —— #
-        if (self.current_token.type == "OPERATOR"
-                and self.current_token.value in ("+", "-")):
-            # 将 -x 或 +x 当成 Prefix F
-            op = self.current_token.value
-            self.match("OPERATOR", op)
-            self.parse_F()
-            self._exit("因子")
-            return
+        tok = self.current_token
 
-        # 函数调用
-        if (self.current_token.type == "IDENTIFIER" and
-                self.peek_n().type == "OPERATOR"
-                and self.peek_n().value == "("):
-            self._enter("函数调用")
+        # 前缀 +、-
+        if tok.type == "OPERATOR" and tok.value in ("+", "-"):
+            op = tok.value
+            self.match("OPERATOR", op)
+            t, v = self.parse_F()
+            # 常量折叠：如果 v 不为 None，就做 +/- 运算
+            if v is not None:
+                v = +v if op == "+" else -v
+            self._exit("因子")
+            return t, v
+
+        # 函数调用，结果肯定不是编译期常量
+        if tok.type == "IDENTIFIER" and self.peek_n().value == "(":
+            name = tok.value
             self.match("IDENTIFIER")
             self.match("OPERATOR", "(")
             self.parse_ArgListOpt()
             self.match("OPERATOR", ")")
-            self._exit("函数调用")
+            sym = self.symtab.lookup_function(name)
+            if not sym:
+                self.report_error(f"[Semantic] call to undeclared function '{name}' at line {tok.line}")
+                t = 'int'
+            else:
+                t = sym.type
             self._exit("因子")
-            return
+            return t, None
 
         # 括号子表达式
-        elif self.current_token.type == "OPERATOR" and self.current_token.value == "(":
+        if tok.type == "OPERATOR" and tok.value == "(":
             self.match("OPERATOR", "(")
-            self.parse_R()
+            t, v = self.parse_B()
             self.match("OPERATOR", ")")
+            self._exit("因子")
+            return t, v
 
-        # 前缀自增/自减
-        elif (self.current_token.type == "OPERATOR"
-              and self.current_token.value in ("++", "--")):
-            # Prefix id
-            op = self.current_token.value
-            self.match("OPERATOR", op)
+        # 标识符，自增/自减后值就不再是常量了
+        if tok.type == "IDENTIFIER":
+            name = tok.value
             self.match("IDENTIFIER")
+            sym = self.symtab.lookup_variable(name)
+            if not sym:
+                self.report_error(f"[Semantic Error] Use of undeclared variable '{name}' at line {tok.line}")
+                t, v = 'int', None
+            else:
+                # 增加使用次数
+                sym.increment()
+                t, v = sym.type, getattr(sym, 'const_val', None)
+            # 后缀 ++/--
+            if self.current_token and self.current_token.type == "OPERATOR" and self.current_token.value in (
+            "++", "--"):
+                self.match("OPERATOR", self.current_token.value)
+                # 变量经过自增以后，编译期就不再是常量
+                v = None
+            self._exit("因子")
+            return t, v
 
-        # 标识符，可能带后缀自增/自减
-        elif self.current_token.type == "IDENTIFIER":
-            self.match("IDENTIFIER")
-
-            name = self.current_token.value
-
-            # Postfix 可选
-            if (self.current_token.type == "OPERATOR"
-                    and self.current_token.value in ("++", "--")):
-                op = self.current_token.value
-                self.match("OPERATOR", op)
-            # 字面量
-        elif self.current_token.type == "LITERAL":
+        # 字面量
+        if tok.type == "LITERAL":
+            lit = tok.value
             self.match("LITERAL")
-        else:
-            self.error("Expected '(', identifier (with optional ++/--), or literal")
+            # 类型与常量值
+            if '.' in lit or 'e' in lit.lower():
+                t, v = 'float', float(lit)
+            elif lit in ('true', 'false'):
+                t, v = 'bool', (lit == 'true')
+            elif lit.startswith("'") and lit.endswith("'"):
+                t, v = 'char', lit[1]  # or ord(...)
+            else:
+                t, v = 'int', int(lit)
+            self._exit("因子")
+            return t, v
 
+        # 错误
+        self.error("Expected factor")
         self._exit("因子")
+        return 'int', None
 
     # ArgListOpt → ArgList | ε
     def parse_ArgListOpt(self):
