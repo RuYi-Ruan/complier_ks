@@ -215,10 +215,13 @@ class SyntaxAnalyzer:
         # --- 符号表 ---
         self.symtab = SymbolTable()
 
-        # 用来存放所有的四元式：(op, arg1, arg2, result)
-        self.quads: List[Tuple[str, str, Optional[str], str]] = []
+        # --- 三地址代码生成相关 ---
+        # 四元式列表：(quad_index, op, arg1, arg2, result)
+        self.quads: List[Tuple[int, str, str, Optional[str], str]] = []
         # 临时变量计数器
         self.temp_cnt = 0
+        # 当前四元式编号
+        self.next_quad = 100  # 从100开始编号
 
     def peek_n(self, n=0):
         """
@@ -252,7 +255,7 @@ class SyntaxAnalyzer:
 
         # 如果看到一个意外的右括号，但当前文法不期待 ')'
         if tok.type == "OPERATOR" and tok.value == ")" and not (expected_type == "OPERATOR" and expected_val == ")"):
-            # 直接报告“多余右括号”，然后跳过
+            # 直接报告"多余右括号"，然后跳过
             self.report_error(f"[Syntax Error] Unexpected ')' at line {tok.line}, col {tok.col}")
             self.current_token = self.tok.next()
             return
@@ -310,32 +313,39 @@ class SyntaxAnalyzer:
         self.temp_cnt += 1
         return f"t{self.temp_cnt}"
 
-    def emit(self, op: str, a1: str, a2: Optional[str], res: str):
-        idx = len(self.quads) + 100  # 从 100 开始编号
-        self.quads.append((idx, op, a1 or "-", a2 or "-", res or "-"))
+    def emit(self, op: str, a1: Optional[str], a2: Optional[str], res: Optional[str]) -> int:
+        """生成一条四元式，返回其编号"""
+        idx = self.next_quad
+        self.next_quad += 1
+        self.quads.append((idx, op, a1 or '-', a2 or '-', res or '-'))
         return idx
 
-    def next_quad(self) -> int:
-        """返回下一条将要 emit 的四元式编号（从 100 开始）"""
-        return len(self.quads) + 100
-
     def makelist(self, idx: int) -> List[int]:
+        """创建一个只包含一个四元式编号的列表"""
         return [idx]
 
-    def merge(self, l1: List[int], l2: List[int]) -> List[int]:
-        return l1 + l2
+    def merge(self, list1: List[int], list2: List[int]) -> List[int]:
+        """合并两个四元式编号列表"""
+        return list1 + list2
 
     def backpatch(self, lst: List[int], target: int):
-        """把 lst 中每条四元式的 result 字段改为 target"""
-        for idx in lst:
-            for i, (quad_no, op, a1, a2, res) in enumerate(self.quads):
-                if quad_no == idx:
-                    self.quads[i] = (quad_no, op, a1, a2, str(target))
+        """回填跳转目标"""
+        for i in lst:
+            # 找到编号为i的四元式
+            for j, quad in enumerate(self.quads):
+                if quad[0] == i:
+                    # 修改result字段为target
+                    self.quads[j] = (quad[0], quad[1], quad[2], quad[3], str(target))
                     break
+
+    def next_quad(self) -> int:
+        """返回下一条四元式的编号"""
+        return self.next_quad
 
     """
     下面是语法分析模块，采用递归下降，parse为入口函数
     """
+
     def parse(self):
         # —— 在真正解析前，先把旧的错误文件清空 ——
         open(self.error_file, 'w', encoding='utf-8').close()
@@ -370,12 +380,7 @@ class SyntaxAnalyzer:
         with open(self.error_file, "w", encoding="utf-8") as f:
             for e in self.errors:
                 f.write(e + "\n")
-        # 写入符号表
         self.symtab.dump()
-        # 写入四元式
-        with open("./output/quads.txt", "w", encoding="utf-8") as f:
-            for idx, op, a1, a2, res in self.quads:
-                f.write(f"{idx}: ({op}, {a1}, {a2}, {res})\n")
 
     # P → TopList
     def parse_P(self):
@@ -410,8 +415,6 @@ class SyntaxAnalyzer:
             if ((self.current_token.type == "IDENTIFIER" and self.current_token.value == "main")
                     or (is_type(self.current_token.type, self.current_token.value) and
                         self.peek_n().value == "main")):
-                # 进入 main 前
-                self.emit('begin', '-', '-', 'main')
                 self._enter("main 函数")
                 ret_type = self.current_token.value
                 if self.current_token.type == "KEYWORD":
@@ -431,7 +434,6 @@ class SyntaxAnalyzer:
                     self.match("DELIMITER", "}")
 
                     self.symtab.exit_scope()
-                    self.emit('sys', '-', '-', '-')
                     self._exit("main 函数")
                     return
                 else:
@@ -618,7 +620,7 @@ class SyntaxAnalyzer:
         # 函数调用也当作表达式语句
         # 如果看到 IDENTIFIER 后面紧跟 '(', 就当作调用
         # 如果看到了 ++ 或 --，或是标识符后面直接跟 ++/--，
-        # 就当成一条“表达式语句”：parse_F 再 match 分号
+        # 就当成一条"表达式语句"：parse_F 再 match 分号
         # 函数调用或其他 F 导出的表达式语句
         elif (self.current_token.type == "IDENTIFIER"
               and self.peek_n().type == "OPERATOR"
@@ -654,12 +656,11 @@ class SyntaxAnalyzer:
                     f"[Semantic Error] Assignment to undeclared variable '{lhs_name}' at line {self.last_token.line}")
             if self.current_token.type == "OPERATOR" and self.current_token.value == "=":
                 self.match("OPERATOR", "=")
-                rhs_type, rhs_val, rhs_place = self.parse_E()
+                rhs_type, rhs_val = self.parse_B()
                 # 如果是编译期常量，就写回 sym.value
                 if sym and rhs_val is not None:
                     sym.value = rhs_val
-                # 插入三地址码：  b = rhs_place
-                self.emit("=", rhs_place, None, lhs_name)
+
                 self.match("DELIMITER", ";")
             else:
                 self.error("Expected assignment operator …")
@@ -681,42 +682,12 @@ class SyntaxAnalyzer:
             self._enter("if语句")
             self.match("KEYWORD", "if")
             self.match("OPERATOR", "(")
-
-            # 正确解构 parse_B 的三个返回值
-            _, true_list, false_list = self.parse_B()
-
+            self.parse_B()
             self.match("OPERATOR", ")")
-
-            # 回填 true_list 到 then 语句的起始地址
-            then_quad = self.next_quad()
-            self.backpatch(true_list, then_quad)
-
-            # 解析 then 语句
             self.parse_S()
-
-            # 看是否存在 else 分支
-            if self.current_token.type == "KEYWORD" and self.current_token.value == "else":
-                # 插入跳转语句，跳过 else，稍后回填
-                skip_else_quad = self.emit("jmp", "-", "-", "-")
-
-                else_quad = self.next_quad()
-                self.backpatch(false_list, else_quad)
-
-                # 匹配 else 分支
-                self.match("KEYWORD", "else")
-                self.parse_S()
-
-                after_if = self.next_quad()
-                # 回填 jmp 跳出 else 的目标地址
-                self.backpatch([skip_else_quad], after_if)
-            else:
-                # 无 else，直接回填 false_list 到 if 语句之后
-                after_if = self.next_quad()
-                self.backpatch(false_list, after_if)
-
+            self.parse_S_prime()
             self._exit("if语句")
             return
-
 
         # while 语句
         elif self.current_token.type == "KEYWORD" and self.current_token.value == "while":
@@ -777,23 +748,10 @@ class SyntaxAnalyzer:
         elif self.current_token.type == "KEYWORD" and self.current_token.value == "return":
             self._enter("return语句")
             self.match("KEYWORD", "return")
-            # 如果紧跟分号，说明是无返回值的 return;
-            if self.current_token.type == "DELIMITER" and self.current_token.value == ";":
-                ret_place = None
-            else:
-                # 解析返回表达式，parse_B 现在返回 (type, const_val, place)
-                _, _, ret_place = self.parse_B()
+            self.parse_ReturnExpr()
             self.match("DELIMITER", ";")
-            # 根据是否有返回值，生成不同的四元式
-            if ret_place is not None:
-                # 带返回值的 return
-                self.emit("return", ret_place, None, "-")
-            else:
-                # 无返回值的 return
-                self.emit("return", "-", None, "-")
             self._exit("return语句")
             return
-
         # 变量声明语句（type 开头）
         elif is_type(self.current_token.type, self.current_token.value):
             self.parse_D()
@@ -808,8 +766,8 @@ class SyntaxAnalyzer:
             self.parse_B()
         elif is_type(self.current_token.type, self.current_token.value):
             # 只有声明初始化，这里只消费 type + id 列表，不要吃分号
-            var_type = self.parse_type()
-            self.parse_IDList(var_type, False)
+            t = self.parse_type()
+            self.parse_IDList(t, False)
         # ε 情况下什么都不做
 
     """
@@ -818,7 +776,6 @@ class SyntaxAnalyzer:
          | id Postfix           // e.g. i++, i--
          | ε
     """
-
     def parse_ForIter(self):
         """ForIter → id CompAssign B | Prefix id | id Postfix | ε"""
         # 1) 赋值迭代：id CompAssign B
@@ -906,36 +863,22 @@ class SyntaxAnalyzer:
         self.parse_IDListTail(var_type)
         self._exit("标识符")
 
-    # IDInit → = E | ε
+    # IDInit → = B | ε
     #   在这里做类型兼容检查
     def parse_IDInit(self, var_name: str, var_type: str) -> Optional[Union[int, float, bool, str]]:
         """
-            IDInit → = E | ε
-            对声明初始化使用算术表达式 parse_E 返回 (typ, const_val, place)
+            IDInit → = B | ε
+            返回 B 的常量值（如果是编译期常量），否则返回 None
         """
         if self.current_token and self.current_token.value == "=":
             self._enter("初始化")
             self.match("OPERATOR", "=")
-
-            # ←—— 这里改成 parse_E 而不是 parse_B ——→
-            rhs_type, rhs_val, rhs_place = self.parse_E()
-
-            # 检查类型兼容性
+            rhs_type, rhs_val = self.parse_B()
             if not self.type_compatible(var_type, rhs_type):
                 self.report_error(
                     f"[Semantic Error] Cannot initialize '{var_name}' of type '{var_type}' "
                     f"with '{rhs_type}' at line {self.current_token.line}"
                 )
-
-            # 如果得到编译期常量，写回 sym.value
-            if rhs_val is not None:
-                sym = self.symtab.lookup_variable(var_name)
-                if sym:
-                    sym.value = rhs_val
-
-            # 生成初始化的三地址码： var_name = rhs_place
-            self.emit("=", rhs_place, None, var_name)
-
             self._exit("初始化")
             return rhs_val
         return None
@@ -976,82 +919,127 @@ class SyntaxAnalyzer:
         # 否则什么都不做（ε）
 
     # B → ( B ) B' | !B B' | R B'
-    def parse_B(self) -> Tuple[str, List[int], List[int]]:
-        """
-        布尔表达式 Produces short-circuit jumps.
-        B → R { && R | || R }
-          | ! B
-        返回 ( 'bool', truelist, falselist )
-        """
-        # 一元 !
-        if self.current_token.type == "OPERATOR" and self.current_token.value == "!":
+    def parse_B(self) -> Tuple[str, Optional[Union[int, float, bool]], Optional[str], List[int], List[int]]:
+        """布尔表达式，返回 (类型, 常量值, 结果地址, truelist, falselist)"""
+        self._enter("布尔表达式")
+        # 先处理布尔分组和一元 !
+        if self.current_token.type == "OPERATOR" and self.current_token.value == "(":
+            self.match("OPERATOR", "(")
+            t, v, p, truelist, falselist = self.parse_B()
+            self.match("OPERATOR", ")")
+            return t, v, p, truelist, falselist
+            
+        elif self.current_token.type == "OPERATOR" and self.current_token.value == "!":
             self.match("OPERATOR", "!")
-            _, tlist, flist = self.parse_B()
-            # 取反：swap
-            return "bool", flist, tlist
+            t, v, p, truelist, falselist = self.parse_B()
+            if t != 'bool':
+                self.report_error(
+                    f"[Semantic] '!' operand must be bool, got {t} at line {self.last_token.line}"
+                )
+            # 对于 !B，交换 truelist 和 falselist
+            return 'bool', None, None, falselist, truelist
+            
+        else:
+            # 处理关系表达式
+            t, v, p, truelist, falselist = self.parse_R()
 
-        # 先解析关系表达式
-        _, truelist, falselist = self.parse_R()
-
-        # 再处理 &&、||
-        while (self.current_token and
-               self.current_token.type == "OPERATOR" and
-               self.current_token.value in ("&&", "||")):
+        # 处理 && 和 ||
+        while (self.current_token
+               and self.current_token.type == "OPERATOR"
+               and self.current_token.value in ("&&", "||")):
             op = self.current_token.value
             self.match("OPERATOR", op)
-
+            
             if op == "&&":
-                # B1 && B2 ：B1.true 跳去 B2，false 列表保留
+                # 对于 B1 && B2：
+                # 1. 回填 B1 的 truelist 到 B2 的开始位置
                 self.backpatch(truelist, self.next_quad())
-                _, t2, f2 = self.parse_B()
-                truelist = t2
-                falselist = self.merge(falselist, f2)
-
-            else:  # op == "||"
-                # B1 || B2 ：B1.false 跳去 B2，true 列表保留
+                # 2. 保存 B1 的 falselist
+                falselist1 = falselist
+                # 3. 解析 B2
+                _, _, _, truelist2, falselist2 = self.parse_B()
+                # 4. 合并 falselist
+                falselist = self.merge(falselist1, falselist2)
+                # 5. 使用 B2 的 truelist
+                truelist = truelist2
+                
+            else:  # ||
+                # 对于 B1 || B2：
+                # 1. 回填 B1 的 falselist 到 B2 的开始位置
                 self.backpatch(falselist, self.next_quad())
-                _, t2, f2 = self.parse_B()
-                truelist = self.merge(truelist, t2)
-                falselist = f2
+                # 2. 保存 B1 的 truelist
+                truelist1 = truelist
+                # 3. 解析 B2
+                _, _, _, truelist2, falselist2 = self.parse_B()
+                # 4. 合并 truelist
+                truelist = self.merge(truelist1, truelist2)
+                # 5. 使用 B2 的 falselist
+                falselist = falselist2
 
-        return "bool", truelist, falselist
+        self._exit("布尔表达式")
+        return t, v, p, truelist, falselist
 
     # R → E R'
     # R' → relop E R' | ε
-    def parse_R(self) -> Tuple[str, List[int], List[int]]:
-        """
-        关系表达式 → E [ relop E ]*
-        返回 ( 'bool', truelist, falselist )
-        """
+    def parse_R(self) -> Tuple[str, Optional[Union[int, float, bool]], Optional[str], List[int], List[int]]:
+        """关系表达式，返回 (类型, 常量值, 结果地址, truelist, falselist)"""
+        self._enter("关系表达式")
+        # 先拿到左侧算术 expr
         lt, lv, lp = self.parse_E()
-        # 一开始没有任何跳转
-        truelist, falselist = [], []
-        # 如果没有遇到任何 relop，就把它当作算术表达式，不产生命令
-        if not (self.current_token and
-                self.current_token.type == "OPERATOR" and
-                self.current_token.value in (">", "<", ">=", "<=", "==", "!=")):
-            return lt, [], []
-        # 否则至少一次关系运算
-        while (self.current_token and
-               self.current_token.type == "OPERATOR" and
-               self.current_token.value in (">", "<", ">=", "<=", "==", "!=")):
+        saw_relop = False
+        truelist = []
+        falselist = []
+
+        # 处理一个或多个 relop E
+        while (self.current_token
+               and self.current_token.type == "OPERATOR"
+               and self.current_token.value in (">", "<", ">=", "<=", "==", "!=")):
+            saw_relop = True
             op = self.current_token.value
             self.match("OPERATOR", op)
             rt, rv, rp = self.parse_E()
-            # 生成 if-true 跳转，target 待回填
-            idx_true = self.emit(f"j{op}", lp, rp, None)
-            # 生成 if-false 跳转，target 待回填
-            idx_false = self.emit("jmp", None, None, None)
-            # 把 lp 更新为下一个比较左值
-            lp = rp
-            # 收集 list
-            truelist = self.merge(truelist, self.makelist(idx_true))
-            falselist = self.merge(falselist, self.makelist(idx_false))
-        return "bool", truelist, falselist
+            
+            if lt not in ("int", "float") or rt not in ("int", "float"):
+                self.report_error(
+                    f"[Semantic] relational '{op}' requires numeric operands, got {lt} and {rt}"
+                )
+            
+            # 生成条件跳转的四元式
+            if lv is not None and rv is not None:
+                # 常量折叠：如果两个操作数都是常量，直接计算
+                result = None
+                if op == ">": result = lv > rv
+                elif op == "<": result = lv < rv
+                elif op == ">=": result = lv >= rv
+                elif op == "<=": result = lv <= rv
+                elif op == "==": result = lv == rv
+                elif op == "!=": result = lv != rv
+                
+                # 生成跳转四元式
+                if result:
+                    truelist = self.makelist(self.emit("jmp", None, None, None))
+                else:
+                    falselist = self.makelist(self.emit("jmp", None, None, None))
+            else:
+                # 生成条件跳转
+                truelist = self.makelist(self.emit(f"j{op}", lp, rp, None))
+                falselist = self.makelist(self.emit("jmp", None, None, None))
+            
+            # 为了支持 a < b < c 链式比较，我们把 lt 更新为 rt
+            lt, lv, lp = rt, rv, rp
+
+        self._exit("关系表达式")
+
+        # 如果至少出现一次关系运算，结果是 bool，且不是编译期常量
+        if saw_relop:
+            return "bool", None, None, truelist, falselist
+        # 否则就退回单纯的算术表达式
+        return lt, lv, lp, [], []
 
     # E → T E'
     # E' → + T E' | - T E' | ε
-    def parse_E(self) -> Tuple[str, Optional[Union[int, float]], str]:
+    def parse_E(self) -> Tuple[str, Optional[Union[int, float]], Optional[str]]:
+        """算术表达式，返回 (类型, 常量值, 结果地址)"""
         self._enter("算术表达式")
         lt, lv, lp = self.parse_T()
         while (self.current_token
@@ -1060,15 +1048,18 @@ class SyntaxAnalyzer:
             op = self.current_token.value
             self.match("OPERATOR", op)
             rt, rv, rp = self.parse_T()
+            # 类型提升
             tt = 'float' if 'float' in (lt, rt) else 'int'
+            # 常量折叠
             if lv is not None and rv is not None:
                 lv = lv + rv if op == "+" else lv - rv
-                lp = str(lv)
+                lp = None  # 常量不需要临时变量
             else:
+                # 生成临时变量存储结果
+                place = self.new_temp()
+                self.emit(op, lp, rp, place)
+                lp = place
                 lv = None
-                tmp = self.new_temp()
-                self.emit(op, lp, rp, tmp)
-                lp = tmp
             lt = tt
         self._exit("算术表达式")
         return lt, lv, lp
@@ -1076,7 +1067,8 @@ class SyntaxAnalyzer:
     # T → F T'
     # T' → * F T' | / F' | ε
     # T → F T'
-    def parse_T(self) -> Tuple[str, Optional[Union[int, float]], str]:
+    def parse_T(self) -> Tuple[str, Optional[Union[int, float]], Optional[str]]:
+        """项，返回 (类型, 常量值, 结果地址)"""
         self._enter("项")
         lt, lv, lp = self.parse_F()
         while (self.current_token
@@ -1085,26 +1077,35 @@ class SyntaxAnalyzer:
             op = self.current_token.value
             self.match("OPERATOR", op)
             rt, rv, rp = self.parse_F()
-            tt = 'float' if 'float' in (lt, rt) else 'int'
+
+            # 除法／取余前做零检查
             if op in ("/", "%") and rv == 0:
                 self.report_error(
                     f"[Semantic Error] Division or modulo by zero at line {self.last_token.line}"
                 )
+                # 遇到除0，就不做常量折叠，也不真正去做 lv/rv
                 lv = None
-            elif lv is not None and rv is not None:
-                if op == "*":
-                    lv = lv * rv
-                elif op == "/":
-                    lv = lv / rv
-                else:
-                    lv = lv % rv
-                lp = str(lv)
+                lp = None
             else:
-                lv = None
-                tmp = self.new_temp()
-                self.emit(op, lp, rp, tmp)
-                lp = tmp
-            lt = tt
+                # 类型提升
+                tt = 'float' if 'float' in (lt, rt) else 'int'
+                # 常量折叠（此时 rv 一定不是 0）
+                if lv is not None and rv is not None:
+                    if op == "*":
+                        lv = lv * rv
+                    elif op == "/":
+                        lv = lv / rv
+                    else:  # "%"
+                        lv = lv % rv
+                    lp = None  # 常量不需要临时变量
+                else:
+                    # 生成临时变量存储结果
+                    place = self.new_temp()
+                    self.emit(op, lp, rp, place)
+                    lp = place
+                    lv = None
+                lt = tt
+
         self._exit("项")
         return lt, lv, lp
 
@@ -1118,42 +1119,63 @@ class SyntaxAnalyzer:
     Prefix  → ++ | -- | + | - 
     """
 
-    def parse_F(self) -> Tuple[str, Optional[Union[int, float]], str]:
+    def parse_F(self) -> Tuple[str, Optional[Union[int, float]], Optional[str]]:
+        """因子，返回 (类型, 常量值, 结果地址)"""
         self._enter("因子")
         tok = self.current_token
 
-        # 前缀 +/-
+        # 前缀 +、-
         if tok.type == "OPERATOR" and tok.value in ("+", "-"):
             op = tok.value
             self.match("OPERATOR", op)
             t, v, p = self.parse_F()
+            # 常量折叠：如果 v 不为 None，就做 +/- 运算
             if v is not None:
                 v = +v if op == "+" else -v
-                p = str(v)
+                p = None  # 常量不需要临时变量
             else:
-                tmp = self.new_temp()
-                self.emit(op, p, None, tmp)
-                p = tmp
+                # 生成临时变量存储结果
+                place = self.new_temp()
+                self.emit(op, p, None, place)
+                p = place
             self._exit("因子")
             return t, v, p
 
-        # 函数调用
+        # 函数调用，结果肯定不是编译期常量
         if tok.type == "IDENTIFIER" and self.peek_n().value == "(":
             name = tok.value
             self.match("IDENTIFIER")
             self.match("OPERATOR", "(")
-            self.parse_ArgListOpt()
+            args = []
+            # 收集参数
+            if (self.current_token and
+                    (self.current_token.value in ("!", "++", "--")
+                     or self.current_token.value == "("
+                     or self.current_token.type in ("IDENTIFIER", "LITERAL"))):
+                while True:
+                    _, _, place = self.parse_B()
+                    args.append(place)
+                    if self.current_token.type != "DELIMITER" or self.current_token.value != ",":
+                        break
+                    self.match("DELIMITER", ",")
             self.match("OPERATOR", ")")
+            
+            # 生成参数传递和函数调用的四元式
+            for arg in args:
+                self.emit('param', arg, None, None)
+            ret_place = self.new_temp()
+            self.emit('call', name, str(len(args)), ret_place)
+            
             sym = self.symtab.lookup_function(name)
-            t = sym.type if sym else 'int'
             if not sym:
                 self.report_error(f"[Semantic] call to undeclared function '{name}' at line {tok.line}")
-            tmp = self.new_temp()
-            self.emit("call", name, "-", tmp)
+                t = 'int'
+            else:
+                t = sym.type
             self._exit("因子")
-            return t, None, tmp
+            return t, None, ret_place
 
-        # 括号表达式
+        # 括号子表达式
         if tok.type == "OPERATOR" and tok.value == "(":
             self.match("OPERATOR", "(")
             t, v, p = self.parse_B()
@@ -1161,49 +1183,51 @@ class SyntaxAnalyzer:
             self._exit("因子")
             return t, v, p
 
-        # 标识符
+        # 标识符，自增/自减后值就不再是常量了
         if tok.type == "IDENTIFIER":
             name = tok.value
             self.match("IDENTIFIER")
             sym = self.symtab.lookup_variable(name)
             if not sym:
                 self.report_error(f"[Semantic Error] Use of undeclared variable '{name}' at line {tok.line}")
-                t, v = 'int', None
+                t, v, p = 'int', None, None
             else:
+                # 增加使用次数
                 sym.increment()
-                t = sym.type
-                # 只有真正的 const 才算编译期常量
-                if sym.kind == 'CONST':
-                    v = sym.value
-                else:
-                    v = None
-
-            # 后缀++ --
+                t, v, p = sym.type, sym.value, name
+            # 后缀 ++/--
             if self.current_token and self.current_token.type == "OPERATOR" and self.current_token.value in (
-            "++", "--"):
-                self.match("OPERATOR", self.current_token.value)
-                v = None
+                    "++", "--"):
+                op = self.current_token.value
+                self.match("OPERATOR", op)
+                # 生成自增/自减的四元式
+                place = self.new_temp()
+                self.emit(op, p, None, place)
+                p = place
+                v = None  # 变量经过自增以后，编译期就不再是常量
             self._exit("因子")
-            return t, v, name
+            return t, v, p
 
         # 字面量
         if tok.type == "LITERAL":
             lit = tok.value
             self.match("LITERAL")
+            # 类型与常量值
             if '.' in lit or 'e' in lit.lower():
                 t, v = 'float', float(lit)
             elif lit in ('true', 'false'):
                 t, v = 'bool', (lit == 'true')
             elif lit.startswith("'") and lit.endswith("'"):
-                t, v = 'char', lit[1]
+                t, v = 'char', lit[1]  # or ord(...)
             else:
                 t, v = 'int', int(lit)
             self._exit("因子")
-            return t, v, str(v)
+            return t, v, None  # 字面量不需要临时变量
 
+        # 错误
         self.error("Expected factor")
         self._exit("因子")
-        return 'int', None, "-"
+        return 'int', None, None
 
     # ArgListOpt → ArgList | ε
     def parse_ArgListOpt(self):
@@ -1215,14 +1239,14 @@ class SyntaxAnalyzer:
             self.parse_ArgList()
         # 否则 ε，什么都不做
 
-    # ArgList → B ArgList’
+    # ArgList → B ArgList'
     def parse_ArgList(self):
         # 先消费一个参数表达式
         self.parse_B()
-        # 不额外判断，直接循环消费所有后续 “, expr”
+        # 不额外判断，直接循环消费所有后续 "expr"
         self.parse_ArgList_tail()
 
-    # ArgList’ → , B ArgList’ | ε
+    # ArgList' → , B ArgList' | ε
     def parse_ArgList_tail(self):
         while (self.current_token.type == "DELIMITER" and
                self.current_token.value == ","):

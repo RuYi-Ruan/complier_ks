@@ -1,2 +1,0 @@
-[Semantic] call to undeclared function 'read' at line 10
-[Semantic] call to undeclared function 'write' at line 19
