@@ -155,14 +155,17 @@ class CompilerIDE(QMainWindow):
         self.syntax_action = QAction("语法分析", self)
         menu_bar.addAction(self.syntax_action)
 
-        edit_menu = menu_bar.addMenu("编辑")  # 添加“编辑”菜单
-        view_menu = menu_bar.addMenu("视图")  # 添加“视图”菜单
+        self.semantic_action = QAction("语义分析", self)
+        menu_bar.addAction(self.semantic_action)
+
         menu_bar.addMenu("中间代码")  # 添加“中间代码”菜单
         menu_bar.addMenu("目标代码")  # 添加“目标代码”菜单
+
+        edit_menu = menu_bar.addMenu("编辑")  # 添加“编辑”菜单
+        view_menu = menu_bar.addMenu("视图")  # 添加“视图”菜单
+
         menu_bar.addMenu("相关算法")  # 添加“相关算法”菜单
         menu_bar.addMenu("关于")  # 添加“关于”菜单
-
-
 
         # 创建“编辑”菜单项
         copy_action = QAction("复制", self)  # 创建复制动作
@@ -345,6 +348,8 @@ class CompilerIDE(QMainWindow):
         self.lex_action.triggered.connect(self.run_lexical_analysis)
         # 语法分析
         self.syntax_action.triggered.connect(self.run_syntax_analysis)
+        # 语义分析
+        self.semantic_action.triggered.connect(self.run_semantic_analysis)
 
     def open_file(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -440,6 +445,120 @@ class CompilerIDE(QMainWindow):
             self.text_edit_bottom.clear()
             self.text_edit_bottom.setTextColor(QColor("#D8000C"))
             self.text_edit_bottom.append(f"语法分析异常：{e}")
+
+    # 执行语义分析
+    def run_semantic_analysis(self):
+        """
+        调用语法分析生成 symbol_table.json 后，
+        将其中的常量、变量、函数、参数分别提取，
+        在右侧分析区以表格形式展示。
+        """
+        # 先确保执行一次语法分析，生成 symbol_table.json
+        self.run_syntax_analysis()
+
+        # 读取符号表 JSON
+        try:
+            import json
+            path = "./output/symbol_table.json"
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            funcs = data.get("functions", [])
+            vars_ = data.get("variables", [])
+
+            # 分四类
+            consts = [v for v in vars_ if v["kind"].lower() in ("const", "constant")]
+            params = [v for v in vars_ if v["kind"] == "parameter"]
+            variables = [v for v in vars_ if v["kind"] == "variable"]
+
+            # 开始生成 HTML
+            html = []
+
+            def make_table(title, headers, rows):
+                tbl = [f"<h3>{title}</h3>"]
+                tbl.append(
+                    "<table border='1' cellpadding='4' cellspacing='0' style='border-collapse:collapse'>"
+                )
+                # header
+                tbl.append(
+                    "<tr>"
+                    + "".join(f"<th>{h}</th>" for h in headers)
+                    + "</tr>"
+                )
+                # rows
+                for r in rows:
+                    tbl.append(
+                        "<tr>"
+                        + "".join(f"<td>{c}</td>" for c in r)
+                        + "</tr>"
+                    )
+                tbl.append("</table>")
+                return "\n".join(tbl)
+
+            # 常量表： name type value first_line count
+            html.append(
+                make_table(
+                    "常量表",
+                    ["Name", "Type", "Value", "First Line", "Count"],
+                    [
+                        [c["name"], c["type"], c.get("value", ""), c["first_line"], c["count"]]
+                        for c in consts
+                    ],
+                )
+            )
+
+            # 变量表： name type value first_line
+            html.append(
+                make_table(
+                    "变量表",
+                    ["Name", "Type", "Value", "First Line", "count"],
+                    [
+                        [v["name"], v["type"], v.get("value", ""), v["first_line"], v["count"]]
+                        for v in variables
+                    ],
+                )
+            )
+
+            # 函数表： name type params scope_level is_defined count
+            html.append(
+                make_table(
+                    "函数表",
+                    ["Name", "Return Type", "Params", "Scope", "Is Defined", "Count"],
+                    [
+                        [
+                            f_["name"],
+                            f_["type"],
+                            ", ".join(f_.get("params", [])),
+                            f_["scope_level"],
+                            f_["is_defined"],
+                            f_["count"],
+                        ]
+                        for f_ in funcs
+                    ],
+                )
+            )
+
+            # 参数表： name type scope_level first_line count
+            html.append(
+                make_table(
+                    "参数表",
+                    ["Name", "Type", "Scope", "First Line", "Count"],
+                    [
+                        [p["name"], p["type"], p["scope_level"], p["first_line"], p["count"]]
+                        for p in params
+                    ],
+                )
+            )
+
+            # 合并并显示
+            self.text_edit_right.clear()
+            self.text_edit_right.setHtml("<br>".join(html))
+
+        except Exception as e:
+            # 出错时在控制台区显示
+            from PyQt5.QtGui import QColor
+            self.text_edit_bottom.setTextColor(QColor("red"))
+            self.text_edit_bottom.append(f"语义分析失败：{e}")
 
     # 展示分析结果 -- token表
     def display_tokens(self, tokens):

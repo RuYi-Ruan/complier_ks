@@ -2,35 +2,95 @@
   "functions": [
     {
       "kind": "function",
+      "name": "isPrime",
+      "type": "int",
+      "params": [
+        "int x "
+      ],
+      "scope_level": 0,
+      "first_line": 4,
+      "count": 1,
+      "is_defined": true,
+      "value": null
+    },
+    {
+      "kind": "function",
       "name": "main",
       "type": "int",
       "params": [],
       "scope_level": 0,
-      "first_line": 1,
+      "first_line": 6,
       "count": 1,
-      "is_defined": true
+      "is_defined": true,
+      "value": null
     }
   ],
   "variables": [
     {
       "kind": "variable",
-      "name": "a",
+      "name": "num",
       "type": "int",
       "params": null,
       "scope_level": 1,
-      "first_line": 2,
-      "count": 2,
-      "is_defined": false
+      "first_line": 8,
+      "count": 3,
+      "is_defined": false,
+      "value": null
     },
     {
       "kind": "variable",
-      "name": "b",
+      "name": "res",
       "type": "int",
       "params": null,
       "scope_level": 1,
-      "first_line": 4,
+      "first_line": 9,
+      "count": 4,
+      "is_defined": false,
+      "value": 0
+    },
+    {
+      "kind": "parameter",
+      "name": "x",
+      "type": "int",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 22,
+      "count": 5,
+      "is_defined": false,
+      "value": null
+    },
+    {
+      "kind": "variable",
+      "name": "i",
+      "type": "int",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 24,
+      "count": 8,
+      "is_defined": false,
+      "value": 3
+    },
+    {
+      "kind": "variable",
+      "name": "yes",
+      "type": "int",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 25,
+      "count": 5,
+      "is_defined": false,
+      "value": 0
+    },
+    {
+      "kind": "CONST",
+      "name": "cst",
+      "type": "int",
+      "params": null,
+      "scope_level": 0,
+      "first_line": 2,
       "count": 1,
-      "is_defined": false
+      "is_defined": false,
+      "value": 10
     }
   ]
 }

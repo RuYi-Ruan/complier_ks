@@ -1,1 +1,2 @@
-[Warning] Variable 'b' declared at line 4 but never used
+[Semantic] call to undeclared function 'read' at line 10
+[Semantic] call to undeclared function 'write' at line 19

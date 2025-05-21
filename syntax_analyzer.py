@@ -78,7 +78,8 @@ def is_type(tok_type, tok_val):
 class Symbol:
     def __init__(self, kind: str, name: str, typ: str,
                  params=None, scope_level: int = 0, line: int = 0,
-                 is_defined: bool = False):
+                 is_defined: bool = False,
+                 value: Optional[Union[int, float, bool, str]] = None):
         self.kind = kind  # 'function' 或 'variable' 或 'parameter'
         self.name = name
         self.type = typ
@@ -86,7 +87,8 @@ class Symbol:
         self.scope_level = scope_level
         self.first_line = line
         self.count = 1
-        self.is_defined = is_defined # 函数是否有函数体(定义)
+        self.is_defined = is_defined  # 函数是否有函数体(定义)
+        self.value = value
 
     def increment(self):
         self.count += 1
@@ -141,7 +143,8 @@ class SymbolTable:
                          is_defined=is_definition)
             self.functions[name] = sym
 
-    def add_variable(self, name: str, var_type: str, kind: str = 'variable', line: int = 0):
+    def add_variable(self, name: str, var_type: str, kind: str = 'variable',
+                     line: int = 0, init_value: Optional[Union[int, float, bool, str]] = None):
         # —— 不允许与函数同名 ——
         if name in self.functions:
             raise Exception(f"[Semantic Error] Variable '{name}' conflicts with function name at line {line}")
@@ -150,7 +153,9 @@ class SymbolTable:
         if name in scope:
             scope[name].increment()
         else:
-            sym = Symbol(kind=kind, name=name, typ=var_type, scope_level=self.current_level, line=line)
+            sym = Symbol(kind=kind, name=name, typ=var_type,
+                         scope_level=self.current_level, line=line,
+                         value=init_value)
             scope[name] = sym
 
     def dump(self, path="./output/symbol_table.json"):
@@ -209,6 +214,11 @@ class SyntaxAnalyzer:
 
         # --- 符号表 ---
         self.symtab = SymbolTable()
+
+        # 用来存放所有的四元式：(op, arg1, arg2, result)
+        self.quads: List[Tuple[str, str, Optional[str], str]] = []
+        # 临时变量计数器
+        self.temp_cnt = 0
 
     def peek_n(self, n=0):
         """
@@ -295,6 +305,15 @@ class SyntaxAnalyzer:
             return True
         return False
 
+    def new_temp(self) -> str:
+        """生成一个新的临时变量名 t1, t2, ..."""
+        self.temp_cnt += 1
+        return f"t{self.temp_cnt}"
+
+    def emit(self, op: str, a1: str, a2: Optional[str], res: str):
+        """增加一条四元式到列表"""
+        self.quads.append((op, a1, a2, res))
+
     """
     下面是语法分析模块，采用递归下降，parse为入口函数
     """
@@ -377,7 +396,7 @@ class SyntaxAnalyzer:
                 self.symtab.enter_scope()
                 # main 一定是定义（有函数体），标记 is_definition=True
                 self.symtab.add_function(name="main", param_types=[], return_type=ret_type,
-                                        line = line, is_definition = True)
+                                         line=line, is_definition=True)
                 self.match("OPERATOR", "(")
                 self.parse_ParamListOpt()
                 self.match("OPERATOR", ")")
@@ -411,7 +430,7 @@ class SyntaxAnalyzer:
                     if t3.value == "(":  # int a ( …  → 函数声明/定义
                         self.parse_FunDef()
                     elif t3.value in ("=", ";", ","):  # int a = …; 或 int a; → 变量声明
-                        self.parse_D(is_const = is_const)
+                        self.parse_D(is_const=is_const)
                     else:
                         self.error(f"Unexpected token {t3} after type+id")
                 else:
@@ -599,13 +618,21 @@ class SyntaxAnalyzer:
             sym = self.symtab.lookup_variable(lhs_name)
             if sym and sym.kind == "CONST":
                 self.report_error(f"[Semantic Error] Cannot assign to constant '{lhs_name}' at line {line}")
+            elif sym:
+                # 赋值的左值也算一次使用
+                sym.increment()
+
             # 检查左值是否已声明
             if not self.symtab.lookup_variable(lhs_name):
                 self.report_error(
                     f"[Semantic Error] Assignment to undeclared variable '{lhs_name}' at line {self.last_token.line}")
             if self.current_token.type == "OPERATOR" and self.current_token.value == "=":
                 self.match("OPERATOR", "=")
-                rhs_type = self.parse_B()
+                rhs_type, rhs_val = self.parse_B()
+                # 如果是编译期常量，就写回 sym.value
+                if sym and rhs_val is not None:
+                    sym.value = rhs_val
+
                 self.match("DELIMITER", ";")
             else:
                 self.error("Expected assignment operator …")
@@ -767,7 +794,7 @@ class SyntaxAnalyzer:
 
     # D → ConstOpt type IDList ;
     # ConstOpt -> const | ε
-    def parse_D(self,  is_const: bool = False):
+    def parse_D(self, is_const: bool = False):
         self._enter("声明语句")
 
         var_type = self.parse_type()  # ← 把类型记下来
@@ -780,9 +807,7 @@ class SyntaxAnalyzer:
     def parse_type(self) -> str:
         if is_type(self.current_token.type, self.current_token.value):
             t = self.current_token.value
-            self._enter("类型")
             self.match("KEYWORD")  # 吃掉 type
-            self._exit("类型")
             return t
         else:
             self.error("Expected type keyword", use_token=self.current_token)
@@ -798,29 +823,41 @@ class SyntaxAnalyzer:
             # 类型有效性（一般不必，因为类型是从 KEYWORD 来的）
             self.symtab.add_variable(var_name, var_type,
                                      kind='CONST' if is_const else "variable",
-                                     line=line)
+                                     line=line, init_value=None)
 
         self.match("IDENTIFIER")
         # 传入 var_name 和 var_type
-        self.parse_IDInit(var_name, var_type)
+        init_val = self.parse_IDInit(var_name, var_type)
+        # 获取元素初始化值
+        if init_val is not None:
+            sym = self.symtab.lookup_var_in_current_scope(var_name)
+            sym.value = init_val
+        # 继续处理后续变量
         self.parse_IDListTail(var_type)
         self._exit("标识符")
 
     # IDInit → = B | ε
     #   在这里做类型兼容检查
-    def parse_IDInit(self, var_name: str, var_type: str):
+    def parse_IDInit(self, var_name: str, var_type: str) -> Optional[Union[int, float, bool, str]]:
+        """
+            IDInit → = B | ε
+            返回 B 的常量值（如果是编译期常量），否则返回 None
+        """
         if self.current_token and self.current_token.value == "=":
             self._enter("初始化")
             self.match("OPERATOR", "=")
-            rhs_type, _ = self.parse_B()  # ← 解包类型/值
+            rhs_type, rhs_val = self.parse_B()
             if not self.type_compatible(var_type, rhs_type):
                 self.report_error(
-                    f"[Semantic Error] Cannot initialize '{var_name}' of type '{var_type}' with '{rhs_type}' at line {self.current_token.line}"
+                    f"[Semantic Error] Cannot initialize '{var_name}' of type '{var_type}' "
+                    f"with '{rhs_type}' at line {self.current_token.line}"
                 )
             self._exit("初始化")
+            return rhs_val
+        return None
 
     # IDList' → , id IDInit IDList' | ε
-    def parse_IDListTail(self, var_type):
+    def parse_IDListTail(self, var_type, is_const=False):
         while self.current_token and self.current_token.type == "DELIMITER" and self.current_token.value == ",":
             self._enter("继续声明")
             self.match("DELIMITER", ",")
@@ -829,9 +866,17 @@ class SyntaxAnalyzer:
             line = self.current_token.line
             # 进行重定义检查
             if not self.check_var_redefine(vname, var_type, line):
-                self.symtab.add_variable(vname, var_type, kind='variable', line=line)
+                self.symtab.add_variable(vname, var_type, kind='CONST' if is_const else "variable",
+                                         line=line, init_value=None)
+
             self.match("IDENTIFIER")
-            self.parse_IDInit()
+            # ① 先解析初始化表达式，拿到可能的常量值
+            init_val = self.parse_IDInit(vname, var_type)
+            # ② 如果真的得到了一个编译期常量，就写回 symbol.value
+            if init_val is not None:
+                sym = self.symtab.lookup_var_in_current_scope(vname)
+                if sym:
+                    sym.value = init_val
             self._exit("继续声明")
 
     # S' → else S | ε
@@ -866,8 +911,7 @@ class SyntaxAnalyzer:
             t = 'bool'
             v = None
         else:
-            t, _ = self.parse_R()
-            v = None
+            t, v = self.parse_R()
 
         # 处理 && 和 ||
         while (self.current_token
@@ -888,7 +932,7 @@ class SyntaxAnalyzer:
 
     # R → E R'
     # R' → relop E R' | ε
-    def parse_R(self) -> Tuple[str, Optional[Union[int, float]]]:
+    def parse_R(self) -> Tuple[str, Optional[Union[int, float, bool]]]:
         """关系表达式，返回 (类型, 常量值)；链式比较总是常量值 None。"""
         self._enter("关系表达式")
         # 先拿到左侧算术 expr
@@ -943,36 +987,38 @@ class SyntaxAnalyzer:
     # T → F T'
     # T' → * F T' | / F' | ε
     # T → F T'
-    # 改成返回 (类型, 常量值)
     def parse_T(self) -> Tuple[str, Optional[Union[int, float]]]:
         self._enter("项")
-        # 先拿到 F 的 (类型, 常量值)
         lt, lv = self.parse_F()
-        # 然后逐个处理 * / %
         while (self.current_token
                and self.current_token.type == "OPERATOR"
                and self.current_token.value in ("*", "/", "%")):
             op = self.current_token.value
             self.match("OPERATOR", op)
             rt, rv = self.parse_F()
+
             # 除法／取余前做零检查
             if op in ("/", "%") and rv == 0:
                 self.report_error(
                     f"[Semantic Error] Division or modulo by zero at line {self.last_token.line}"
                 )
-            # 类型提升
-            tt = 'float' if 'float' in (lt, rt) else 'int'
-            # 常量折叠
-            if lv is not None and rv is not None:
-                if op == "*":
-                    lv = lv * rv
-                elif op == "/":
-                    lv = lv / rv
-                else:
-                    lv = lv % rv
-            else:
+                # 遇到除0，就不做常量折叠，也不真正去做 lv/rv
                 lv = None
-            lt = tt
+            else:
+                # 类型提升
+                tt = 'float' if 'float' in (lt, rt) else 'int'
+                # 常量折叠（此时 rv 一定不是 0）
+                if lv is not None and rv is not None:
+                    if op == "*":
+                        lv = lv * rv
+                    elif op == "/":
+                        lv = lv / rv
+                    else:  # "%"
+                        lv = lv % rv
+                else:
+                    lv = None
+                lt = tt
+
         self._exit("项")
         return lt, lv
 
@@ -1037,10 +1083,10 @@ class SyntaxAnalyzer:
             else:
                 # 增加使用次数
                 sym.increment()
-                t, v = sym.type, getattr(sym, 'const_val', None)
+                t, v = sym.type, sym.value
             # 后缀 ++/--
             if self.current_token and self.current_token.type == "OPERATOR" and self.current_token.value in (
-            "++", "--"):
+                    "++", "--"):
                 self.match("OPERATOR", self.current_token.value)
                 # 变量经过自增以后，编译期就不再是常量
                 v = None
