@@ -336,6 +336,7 @@ class SyntaxAnalyzer:
     """
     下面是语法分析模块，采用递归下降，parse为入口函数
     """
+
     def parse(self):
         # —— 在真正解析前，先把旧的错误文件清空 ——
         open(self.error_file, 'w', encoding='utf-8').close()
@@ -717,30 +718,82 @@ class SyntaxAnalyzer:
             self._exit("if语句")
             return
 
-
         # while 语句
         elif self.current_token.type == "KEYWORD" and self.current_token.value == "while":
             self._enter("while语句")
+            # 1. 记录循环开始位置
+            loop_start = self.next_quad()
+
+            # 消费 'while' 和 '('
             self.match("KEYWORD", "while")
             self.match("OPERATOR", "(")
-            self.parse_B()
+
+            # 2. 生成条件测试的 truelist/falselist
+            _, truelist, falselist = self.parse_B()
+
+            # 3. 回填 true 跳转到循环体第一条语句
+            body_quad = self.next_quad()
+            self.backpatch(truelist, body_quad)
+
+            # 消费 ')'
             self.match("OPERATOR", ")")
+
+            # 4. 生成循环体
             self.parse_S()
+
+            # 5. 循环体末尾无条件跳回测试
+            self.emit("jmp", "-", "-", str(loop_start))
+
+            # 6. 回填 false 跳出循环到当前下一条
+            after_loop = self.next_quad()
+            self.backpatch(falselist, after_loop)
+
             self._exit("while语句")
             return
 
         # for 语句
         elif self.current_token.type == "KEYWORD" and self.current_token.value == "for":
-            self._enter("for 语句")
+            self._enter("for语句")
+
+            # 1. 消费 'for' 和 '('
             self.match("KEYWORD", "for")
             self.match("OPERATOR", "(")
+
+            # 2. 先处理 Init 部分（可能是赋值或声明）
+            #    这里不生成跳转指令，只消费掉 init
             self.parse_ForInit()
             self.match("DELIMITER", ";")
-            self.parse_B()
+
+            # 3. 记录条件判断开始的位置
+            cond_quad = self.next_quad()
+
+            # 4. 解析条件表达式 B → 得到 truelist/falselist
+            _, truelist, falselist = self.parse_B()
             self.match("DELIMITER", ";")
+
+            # 5. 在迭代之前，跳到循环体：回填 truelist
+            body_quad = self.next_quad()
+            self.backpatch(truelist, body_quad)
+
+            # 6. 暂时记下迭代部分开始，用于后面 emit
+            #    （这里我们不需要编号，只直接生成）
+            #    消费 iter 部分但不落分号
             self.parse_ForIter()
             self.match("OPERATOR", ")")
+
+            # 7. 生成循环体
             self.parse_S()
+
+            # 8. 循环体末尾先执行 Iter 部分的中间码
+            #    （如果 parse_ForIter 内 emit 了四元式，就已经插入了
+            #     否则请在 parse_ForIter 中加入对应 emit）
+            #    然后无条件跳回条件判断
+            self.emit("jmp", "-", "-", str(cond_quad))
+
+            # 9. 最后回填 falselist 到循环退出后第一条
+            after_for = self.next_quad()
+            self.backpatch(falselist, after_for)
+
             self._exit("for语句")
             return
 
@@ -782,7 +835,7 @@ class SyntaxAnalyzer:
                 ret_place = None
             else:
                 # 解析返回表达式，parse_B 现在返回 (type, const_val, place)
-                _, _, ret_place = self.parse_B()
+                _, _, ret_place = self.parse_E()
             self.match("DELIMITER", ";")
             # 根据是否有返回值，生成不同的四元式
             if ret_place is not None:
@@ -803,9 +856,13 @@ class SyntaxAnalyzer:
     # ForInit → id = B | D | ε 初始化条件
     def parse_ForInit(self):
         if self.current_token.type == "IDENTIFIER":
+            lhs_name = self.current_token.value
             self.match("IDENTIFIER")
             self.match("OPERATOR", "=")
-            self.parse_B()
+            # 解析右侧布尔/算术表达式
+            _, _, rhs_place = self.parse_E()
+            # 生成初始化赋值
+            self.emit("=", rhs_place, None, lhs_name)
         elif is_type(self.current_token.type, self.current_token.value):
             # 只有声明初始化，这里只消费 type + id 列表，不要吃分号
             var_type = self.parse_type()
@@ -828,10 +885,22 @@ class SyntaxAnalyzer:
                 and self.peek_n().type == "OPERATOR"
                 and self.peek_n().value in {"=", "+=", "-=", "*=", "/=", "%="}):
             self._enter("赋值迭代")
+            var = self.current_token.value
             self.match("IDENTIFIER")
-            self.match("OPERATOR")  # =, +=, ...
-            self.parse_B()
+            op = self.current_token.value  # e.g. "+="
+            self.match("OPERATOR", op)
+            # 解析右侧表达式
+            _, _, rhs_place = self.parse_E()
+            if op == "=":
+                self.emit("=", rhs_place, None, var)
+            else:
+                # e.g. x += y => t = xy; x = t
+                tmp = self.new_temp()
+                base_op = op[:-1]  # "+=" -> "+"
+                self.emit(base_op, var, rhs_place, tmp)
+                self.emit("=", tmp, None, var)
             self._exit("赋值迭代")
+            return
         # 2) 前缀 ++i / --i
         elif (self.current_token
               and self.current_token.type == "OPERATOR"
@@ -1180,7 +1249,7 @@ class SyntaxAnalyzer:
 
             # 后缀++ --
             if self.current_token and self.current_token.type == "OPERATOR" and self.current_token.value in (
-            "++", "--"):
+                    "++", "--"):
                 self.match("OPERATOR", self.current_token.value)
                 v = None
             self._exit("因子")

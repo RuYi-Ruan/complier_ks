@@ -15,25 +15,25 @@
   "variables": [
     {
       "kind": "variable",
-      "name": "a",
+      "name": "i",
       "type": "int",
       "params": null,
       "scope_level": 1,
       "first_line": 2,
       "count": 4,
       "is_defined": false,
-      "value": 1
+      "value": 0
     },
     {
       "kind": "variable",
-      "name": "b",
+      "name": "sum",
       "type": "int",
       "params": null,
       "scope_level": 1,
       "first_line": 3,
       "count": 4,
       "is_defined": false,
-      "value": 2
+      "value": 0
     }
   ]
 }

@@ -114,7 +114,7 @@ ForIter     → id CompAssign B           // e.g. i = expr
              | id Postfix                // e.g. i++, i--
              | ε
 
-ReturnExpr  → B
+ReturnExpr  → E
              | ε                         // 可选返回值
 
 B           → ( B ) B'
