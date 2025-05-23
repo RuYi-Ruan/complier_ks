@@ -220,6 +220,11 @@ class SyntaxAnalyzer:
         # 临时变量计数器
         self.temp_cnt = 0
 
+        # 用于支持 break/continue：维护循环的 break_list 和 continue_list 栈
+        # 每遇到一个循环，就在这两个栈上 push 空列表；循环结束时 pop 并回填
+        self.break_stack: List[List[int]] = []
+        self.continue_stack: List[List[int]] = []
+
     def peek_n(self, n=0):
         """
         返回从 current_token 开始，向前看第 n 个 token，但不移动指针。
@@ -311,6 +316,7 @@ class SyntaxAnalyzer:
         return f"t{self.temp_cnt}"
 
     def emit(self, op: str, a1: str, a2: Optional[str], res: str):
+        """生成四元式, 并返回四元式编号"""
         idx = len(self.quads) + 100  # 从 100 开始编号
         self.quads.append((idx, op, a1 or "-", a2 or "-", res or "-"))
         return idx
@@ -320,13 +326,22 @@ class SyntaxAnalyzer:
         return len(self.quads) + 100
 
     def makelist(self, idx: int) -> List[int]:
+        """
+        把单个四元式编号 idx 包装成一个列表返回
+        当解析到一个新的跳转指令（比如关系运算 j< 或 jmp）时，
+        立刻生成它的“真跳转列表”或“假跳转列表”，即一个单元素列表，后面便于统一回填。
+        """
         return [idx]
 
     def merge(self, l1: List[int], l2: List[int]) -> List[int]:
+        """
+        将两个这样的跳转列表拼接成一个列表返回
+        在处理复合布尔表达式（如 &&、||）时，需要把不同子表达式生成的跳转列表合并起来
+        """
         return l1 + l2
 
     def backpatch(self, lst: List[int], target: int):
-        """把 lst 中每条四元式的 result 字段改为 target"""
+        """把 lst 中每条四元式的 result 字段改为 target 地址回填"""
         for idx in lst:
             for i, (quad_no, op, a1, a2, res) in enumerate(self.quads):
                 if quad_no == idx:
@@ -417,6 +432,7 @@ class SyntaxAnalyzer:
                 ret_type = self.current_token.value
                 if self.current_token.type == "KEYWORD":
                     self.match("KEYWORD")
+                # 获取行号
                 line = self.current_token.line
                 self.match("IDENTIFIER", "main")
                 self.symtab.enter_scope()
@@ -492,7 +508,7 @@ class SyntaxAnalyzer:
             self.symtab.enter_scope()
 
             self.match("OPERATOR", "(")
-            # TODO: 后续应收集函数参数
+            # 收集函数参数
             params = self.collect_params()
             # self.parse_ParamListOpt()
 
@@ -514,6 +530,7 @@ class SyntaxAnalyzer:
                                                  var_type=ptype,
                                                  kind='parameter',
                                                  line=pline)
+
                 self.symtab.add_function(name=func_name, return_type=func_type, param_types=[],
                                          line=self.current_token.line, is_definition=True)
                 # 更新函数签名
@@ -721,6 +738,9 @@ class SyntaxAnalyzer:
         # while 语句
         elif self.current_token.type == "KEYWORD" and self.current_token.value == "while":
             self._enter("while语句")
+            # push break/continue 列表
+            self.break_stack.append([])
+            self.continue_stack.append([])
             # 1. 记录循环开始位置
             loop_start = self.next_quad()
 
@@ -744,9 +764,21 @@ class SyntaxAnalyzer:
             # 5. 循环体末尾无条件跳回测试
             self.emit("jmp", "-", "-", str(loop_start))
 
+            # 回填 continue → 跳回 loop_start
+            cont_list = self.continue_stack.pop()
+            if cont_list:
+                self.backpatch(cont_list, loop_start)
+
             # 6. 回填 false 跳出循环到当前下一条
             after_loop = self.next_quad()
+            # 回填 while 条件假时和所有 break 跳出的目标
+            # 先假跳转
             self.backpatch(falselist, after_loop)
+            # 再回填所有 break
+            br_list = self.break_stack.pop()
+
+            if br_list:
+                self.backpatch(br_list, after_loop)
 
             self._exit("while语句")
             return
@@ -754,6 +786,9 @@ class SyntaxAnalyzer:
         # for 语句
         elif self.current_token.type == "KEYWORD" and self.current_token.value == "for":
             self._enter("for语句")
+            # *[新增]* push break/continue 列表
+            self.break_stack.append([])
+            self.continue_stack.append([])
 
             # 1. 消费 'for' 和 '('
             self.match("KEYWORD", "for")
@@ -790,9 +825,19 @@ class SyntaxAnalyzer:
             #    然后无条件跳回条件判断
             self.emit("jmp", "-", "-", str(cond_quad))
 
+            # *[新增]* 回填 continue → 跳到 cond_quad（循环条件处）
+            cont_list = self.continue_stack.pop()
+            if cont_list:
+                self.backpatch(cont_list, cond_quad)
+
+
             # 9. 最后回填 falselist 到循环退出后第一条
             after_for = self.next_quad()
+            # 回填 for 条件假时和所有 break 跳出的目标
             self.backpatch(falselist, after_for)
+            br_list = self.break_stack.pop()
+            if br_list:
+                self.backpatch(br_list, after_for)
 
             self._exit("for语句")
             return
@@ -800,13 +845,45 @@ class SyntaxAnalyzer:
         # do-while 语句
         elif self.current_token.type == "KEYWORD" and self.current_token.value == "do":
             self._enter("do-while语句")
+
+            # push break/continue 列表
+            self.break_stack.append([])
+            self.continue_stack.append([])
+
+            # 1. 记录循环体开始位置
+            loop_start = self.next_quad()
+
+            # 2. 消费 'do' 并生成循环体
             self.match("KEYWORD", "do")
             self.parse_S()
+
+            # 3. 消费 'while' 和 '('，准备解析条件
             self.match("KEYWORD", "while")
             self.match("OPERATOR", "(")
-            self.parse_B()
+
+            # 4. 生成条件测试的 truelist/falselist
+            _, truelist, falselist = self.parse_B()
+
+            # 5. 回填 truelist 到循环体开始位置，实现真则重回 do
+            self.backpatch(truelist, loop_start)
+
+            # 6. 消费 ')' 和 ';'
             self.match("OPERATOR", ")")
             self.match("DELIMITER", ";")
+
+            # 回填 continue → 跳回 loop_start
+            cont_list = self.continue_stack.pop()
+            if cont_list:
+                self.backpatch(cont_list, loop_start)
+
+            # 7. 回填 falselist 到循环结束后的下一条四元式
+            after_do = self.next_quad()
+            # 回填 do-while 条件假时和所有 break 跳出的目标
+            self.backpatch(falselist, after_do)
+            br_list = self.break_stack.pop()
+            if br_list:
+                self.backpatch(br_list, after_do)
+
             self._exit("do-while语句")
             return
 
@@ -814,14 +891,26 @@ class SyntaxAnalyzer:
         elif self.current_token.type == "KEYWORD" and self.current_token.value == "break":
             self._enter("break语句")
             self.match("KEYWORD", "break")
-            self.match("DELIMITER", ";")
-            self._exit("break语句")
+            # emit 一个占位的无条件跳转，目标待回填
+            idx = self.emit("jmp", "-", "-", "-")
+            # 收集到当前最内层循环的 break_list
+
+            if self.break_stack:
+                self.break_stack[-1].append(idx)
+                self.match("DELIMITER", ";")
+                self._exit("break语句")
             return
 
         # continue语句
         elif self.current_token.type == "KEYWORD" and self.current_token.value == "continue":
             self._enter("continue语句")
             self.match("KEYWORD", "continue")
+            # emit 一个占位的无条件跳转，目标待回填
+            idx = self.emit("jmp", "-", "-", "-")
+            # 收集到当前最内层循环的 continue_list
+
+            if self.continue_stack:
+                self.continue_stack[-1].append(idx)
             self.match("DELIMITER", ";")
             self._exit("continue语句")
             return
@@ -894,7 +983,7 @@ class SyntaxAnalyzer:
             if op == "=":
                 self.emit("=", rhs_place, None, var)
             else:
-                # e.g. x += y => t = xy; x = t
+                # e.g. x += y => t = x + y; x = t
                 tmp = self.new_temp()
                 base_op = op[:-1]  # "+=" -> "+"
                 self.emit(base_op, var, rhs_place, tmp)
@@ -1111,7 +1200,7 @@ class SyntaxAnalyzer:
             idx_true = self.emit(f"j{op}", lp, rp, None)
             # 生成 if-false 跳转，target 待回填
             idx_false = self.emit("jmp", None, None, None)
-            # 把 lp 更新为下一个比较左值
+            # 把 lp 更新为下一个比较左值,因为后续可能有其它表达式
             lp = rp
             # 收集 list
             truelist = self.merge(truelist, self.makelist(idx_true))
@@ -1122,24 +1211,30 @@ class SyntaxAnalyzer:
     # E' → + T E' | - T E' | ε
     def parse_E(self) -> Tuple[str, Optional[Union[int, float]], str]:
         self._enter("算术表达式")
+        # 解析第一个项
         lt, lv, lp = self.parse_T()
         while (self.current_token
                and self.current_token.type == "OPERATOR"
                and self.current_token.value in ("+", "-")):
             op = self.current_token.value
             self.match("OPERATOR", op)
+            # 解析右侧表达式的类型、值与跳转位置
             rt, rv, rp = self.parse_T()
             tt = 'float' if 'float' in (lt, rt) else 'int'
+            # 如果左右两边都能在编译期算出常量值，则直接计算常量，常量折叠
             if lv is not None and rv is not None:
                 lv = lv + rv if op == "+" else lv - rv
                 lp = str(lv)
             else:
+                # 否则无法在编译期确定结果，需要生成临时变量名和四元式
                 lv = None
                 tmp = self.new_temp()
                 self.emit(op, lp, rp, tmp)
                 lp = tmp
+            # 更新当前表达式的类型为新的类型
             lt = tt
         self._exit("算术表达式")
+        # 返回表达式的类型 lt, 可能的常量值 lv, 和结果位置 lp
         return lt, lv, lp
 
     # T → F T'

@@ -6,7 +6,7 @@
       "type": "int",
       "params": [],
       "scope_level": 0,
-      "first_line": 1,
+      "first_line": 2,
       "count": 1,
       "is_defined": true,
       "value": null
@@ -19,10 +19,10 @@
       "type": "int",
       "params": null,
       "scope_level": 1,
-      "first_line": 2,
-      "count": 4,
+      "first_line": 3,
+      "count": 5,
       "is_defined": false,
-      "value": 0
+      "value": null
     },
     {
       "kind": "variable",
@@ -31,7 +31,7 @@
       "params": null,
       "scope_level": 1,
       "first_line": 3,
-      "count": 4,
+      "count": 5,
       "is_defined": false,
       "value": 0
     }
