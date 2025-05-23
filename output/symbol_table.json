@@ -2,11 +2,25 @@
   "functions": [
     {
       "kind": "function",
+      "name": "add",
+      "type": "int",
+      "params": [
+        "int a ",
+        "int b "
+      ],
+      "scope_level": 0,
+      "first_line": 1,
+      "count": 1,
+      "is_defined": true,
+      "value": null
+    },
+    {
+      "kind": "function",
       "name": "main",
       "type": "int",
       "params": [],
       "scope_level": 0,
-      "first_line": 2,
+      "first_line": 4,
       "count": 1,
       "is_defined": true,
       "value": null
@@ -14,26 +28,59 @@
   ],
   "variables": [
     {
-      "kind": "variable",
-      "name": "i",
+      "kind": "parameter",
+      "name": "a",
       "type": "int",
       "params": null,
       "scope_level": 1,
-      "first_line": 3,
-      "count": 5,
+      "first_line": 1,
+      "count": 2,
+      "is_defined": false,
+      "value": null
+    },
+    {
+      "kind": "parameter",
+      "name": "b",
+      "type": "int",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 1,
+      "count": 2,
       "is_defined": false,
       "value": null
     },
     {
       "kind": "variable",
-      "name": "sum",
+      "name": "a",
       "type": "int",
       "params": null,
       "scope_level": 1,
-      "first_line": 3,
-      "count": 5,
+      "first_line": 5,
+      "count": 2,
       "is_defined": false,
-      "value": 0
+      "value": 10
+    },
+    {
+      "kind": "variable",
+      "name": "b",
+      "type": "int",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 6,
+      "count": 2,
+      "is_defined": false,
+      "value": 20
+    },
+    {
+      "kind": "variable",
+      "name": "r",
+      "type": "int",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 7,
+      "count": 2,
+      "is_defined": false,
+      "value": null
     }
   ]
 }

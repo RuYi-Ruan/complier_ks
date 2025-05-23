@@ -510,10 +510,9 @@ class SyntaxAnalyzer:
             self.match("OPERATOR", "(")
             # 收集函数参数
             params = self.collect_params()
-            # self.parse_ParamListOpt()
 
             self.match("OPERATOR", ")")
-
+            self.emit("begin_func", "-", "-", func_name)
             if self.current_token and self.current_token.type == "DELIMITER" and self.current_token.value == ";":
                 self._enter("函数声明")
                 self.symtab.add_function(name=func_name, return_type=func_type, param_types=[],
@@ -521,6 +520,7 @@ class SyntaxAnalyzer:
                 # 更新函数签名
                 self.symtab.functions[func_name].params = [f"{ptype} {pname} " for ptype, pname, _ in params]
                 self.match("DELIMITER", ";")  # 函数声明
+                self.emit("end_func", "-", "-", func_name)
                 self._exit("函数声明")
             elif self.current_token and self.current_token.type == "DELIMITER" and self.current_token.value == "{":
                 # 如果是函数定义则需要将函数中的参数加入符号表
@@ -538,6 +538,7 @@ class SyntaxAnalyzer:
                 self.match("DELIMITER", "{")
                 self.parse_L()
                 self.match("DELIMITER", "}")
+                self.emit("end_func", "-", "-", func_name)
             else:
                 self.error("Expected ';' or '{' after function signature", use_token=self.current_token)
 
@@ -829,7 +830,6 @@ class SyntaxAnalyzer:
             cont_list = self.continue_stack.pop()
             if cont_list:
                 self.backpatch(cont_list, cond_quad)
-
 
             # 9. 最后回填 falselist 到循环退出后第一条
             after_for = self.next_quad()
@@ -1306,14 +1306,21 @@ class SyntaxAnalyzer:
             name = tok.value
             self.match("IDENTIFIER")
             self.match("OPERATOR", "(")
-            self.parse_ArgListOpt()
+            # 收集所有实参的 place
+            arg_places = self.parse_ArgListOpt()
             self.match("OPERATOR", ")")
             sym = self.symtab.lookup_function(name)
             t = sym.type if sym else 'int'
             if not sym:
                 self.report_error(f"[Semantic] call to undeclared function '{name}' at line {tok.line}")
+
+            # ② 为每个实参生成 param 四元式
+            for p in arg_places:
+                self.emit("param", p, None, "-")
+            # ③ 生成 call 四元式，res 存放返回值临时变量
             tmp = self.new_temp()
-            self.emit("call", name, "-", tmp)
+            self.emit("call", name, str(len(arg_places)), tmp)
+
             self._exit("因子")
             return t, None, tmp
 
@@ -1370,21 +1377,32 @@ class SyntaxAnalyzer:
         return 'int', None, "-"
 
     # ArgListOpt → ArgList | ε
-    def parse_ArgListOpt(self):
-        # 只有当看到可能的表达式起始符时，才 parse ArgList
-        if (self.current_token and
-                (self.current_token.value in ("!", "++", "--")
-                 or self.current_token.value == "("
-                 or self.current_token.type in ("IDENTIFIER", "LITERAL"))):
-            self.parse_ArgList()
-        # 否则 ε，什么都不做
+    # 返回一个实参 place 列表
+    def parse_ArgListOpt(self) -> List[str]:
+        # 如果下一个是表达式的起始符，就去解析实参列表
 
-    # ArgList → B ArgList’
-    def parse_ArgList(self):
-        # 先消费一个参数表达式
-        self.parse_B()
-        # 不额外判断，直接循环消费所有后续 “, expr”
-        self.parse_ArgList_tail()
+        if self.current_token and (
+                self.current_token.value in ("!", "++", "--")
+                or self.current_token.value == "("
+                or self.current_token.type in ("IDENTIFIER", "LITERAL")
+        ):
+            return self.parse_ArgList()
+
+        return []
+
+    # ArgList → B ( ',' B )*
+    # 返回一个实参 place 列表
+    def parse_ArgList(self) -> List[str]:
+        args: List[str] = []
+        # 解析第一个实参为算术／通用表达式
+        _, _, place = self.parse_E()
+        args.append(place)
+        # 解析后续逗号分隔的实参
+        while self.current_token and self.current_token.type == "DELIMITER" and self.current_token.value == ",":
+            self.match("DELIMITER", ",")
+            _, _, place = self.parse_E()
+            args.append(place)
+        return args
 
     # ArgList’ → , B ArgList’ | ε
     def parse_ArgList_tail(self):
