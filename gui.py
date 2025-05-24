@@ -158,7 +158,11 @@ class CompilerIDE(QMainWindow):
         self.semantic_action = QAction("语义分析", self)
         menu_bar.addAction(self.semantic_action)
 
+        self.inter_code_action = QAction("生成中间代码", self)
+        menu_bar.addAction(self.inter_code_action)
+
         menu_bar.addMenu("中间代码")  # 添加“中间代码”菜单
+
         menu_bar.addMenu("目标代码")  # 添加“目标代码”菜单
 
         edit_menu = menu_bar.addMenu("编辑")  # 添加“编辑”菜单
@@ -350,6 +354,8 @@ class CompilerIDE(QMainWindow):
         self.syntax_action.triggered.connect(self.run_syntax_analysis)
         # 语义分析
         self.semantic_action.triggered.connect(self.run_semantic_analysis)
+        # 生成中间代码
+        self.inter_code_action.triggered.connect(self.run_intermediate_analysis)
 
     def open_file(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -559,6 +565,60 @@ class CompilerIDE(QMainWindow):
             from PyQt5.QtGui import QColor
             self.text_edit_bottom.setTextColor(QColor("red"))
             self.text_edit_bottom.append(f"语义分析失败：{e}")
+
+    # 生成中间代码
+    def run_intermediate_analysis(self):
+        """
+        生成并展示四元式：
+        1. 先做词法分析、保存 tokens/errors（和 run_syntax_analysis 相同）
+        2. 调用 SyntaxAnalyzer 生成四元式文件 ./output/quads.txt
+        3. 读取并显示四元式到分析结果区；语法错误输出到控制台区
+        """
+        try:
+            # 1. 词法分析（复用已有逻辑）
+            code = self.text_edit_top.toPlainText()
+            lexer = Lexer()
+            tokens, lex_errors = lexer.tokenize(code)
+            save_analysis_results(tokens, lex_errors)
+
+            # 2. 语法/中间码生成
+            from syntax_analyzer import SyntaxAnalyzer
+            sa = SyntaxAnalyzer()
+
+            sa.parse()  # 内部会写出 syntaxTree.txt, syntax_errors.txt, symbol_table.json, quads.txt
+
+            # 3. 读取并显示四元式
+            quads_path = "./output/quads.txt"
+            self.text_edit_right.clear()
+            if os.path.exists(quads_path):
+                with open(quads_path, "r", encoding="utf-8") as f:
+                    quads_txt = f.read()
+                self.text_edit_right.setPlainText(quads_txt)
+            else:
+                self.text_edit_right.setPlainText("[Error] 四元式文件未生成")
+
+            # 4. 显示语法错误（如果有）
+            errs_path = "./output/syntax_errors.txt"
+            self.text_edit_bottom.clear()
+            if os.path.exists(errs_path):
+                with open(errs_path, "r", encoding="utf-8") as f:
+                    lines = [l.rstrip() for l in f if l.strip()]
+                if lines:
+                    for line in lines:
+                        self.text_edit_bottom.setTextColor(QColor("red"))
+                        self.text_edit_bottom.append(line)
+                    self.text_edit_bottom.append(f"共发现 {len(lines)} 个语法错误")
+                else:
+                    self.text_edit_bottom.setTextColor(QColor("#008800"))
+                    self.text_edit_bottom.append("中间代码生成完毕，0 个语法错误")
+            else:
+                self.text_edit_bottom.setTextColor(QColor("#008800"))
+                self.text_edit_bottom.append("中间代码生成完毕，0 个语法错误")
+        except Exception as e:
+            # 出现异常也输出到控制台区
+            self.text_edit_bottom.clear()
+            self.text_edit_bottom.setTextColor(QColor("red"))
+            self.text_edit_bottom.append(f"中间代码生成异常：{e}")
 
     # 展示分析结果 -- token表
     def display_tokens(self, tokens):

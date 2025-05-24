@@ -9,7 +9,7 @@
         "int b "
       ],
       "scope_level": 0,
-      "first_line": 1,
+      "first_line": 4,
       "count": 1,
       "is_defined": true,
       "value": null
@@ -20,7 +20,7 @@
       "type": "int",
       "params": [],
       "scope_level": 0,
-      "first_line": 4,
+      "first_line": 8,
       "count": 1,
       "is_defined": true,
       "value": null
@@ -33,7 +33,7 @@
       "type": "int",
       "params": null,
       "scope_level": 1,
-      "first_line": 1,
+      "first_line": 4,
       "count": 2,
       "is_defined": false,
       "value": null
@@ -44,43 +44,65 @@
       "type": "int",
       "params": null,
       "scope_level": 1,
-      "first_line": 1,
+      "first_line": 4,
       "count": 2,
       "is_defined": false,
       "value": null
     },
     {
       "kind": "variable",
-      "name": "a",
+      "name": "x",
       "type": "int",
       "params": null,
       "scope_level": 1,
-      "first_line": 5,
-      "count": 2,
+      "first_line": 9,
+      "count": 5,
       "is_defined": false,
-      "value": 10
+      "value": 2
     },
     {
       "kind": "variable",
-      "name": "b",
+      "name": "y",
       "type": "int",
       "params": null,
       "scope_level": 1,
-      "first_line": 6,
-      "count": 2,
+      "first_line": 9,
+      "count": 5,
       "is_defined": false,
-      "value": 20
+      "value": 3
     },
     {
       "kind": "variable",
-      "name": "r",
+      "name": "sum",
       "type": "int",
       "params": null,
       "scope_level": 1,
-      "first_line": 7,
-      "count": 2,
+      "first_line": 9,
+      "count": 6,
+      "is_defined": false,
+      "value": 0
+    },
+    {
+      "kind": "variable",
+      "name": "result",
+      "type": "int",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 9,
+      "count": 3,
       "is_defined": false,
       "value": null
+    },
+    {
+      "kind": "variable",
+      "name": "i",
+      "type": "int",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 18,
+      "count": 3,
+      "is_defined": false,
+      "value": 0
     }
   ]
 }
