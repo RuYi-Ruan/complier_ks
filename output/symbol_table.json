@@ -5,8 +5,8 @@
       "name": "add",
       "type": "int",
       "params": [
-        "int a ",
-        "int b "
+        "x ",
+        "y "
       ],
       "scope_level": 0,
       "first_line": 4,
@@ -29,7 +29,7 @@
   "variables": [
     {
       "kind": "parameter",
-      "name": "a",
+      "name": "x",
       "type": "int",
       "params": null,
       "scope_level": 1,
@@ -40,7 +40,7 @@
     },
     {
       "kind": "parameter",
-      "name": "b",
+      "name": "y",
       "type": "int",
       "params": null,
       "scope_level": 1,
@@ -51,40 +51,7 @@
     },
     {
       "kind": "variable",
-      "name": "x",
-      "type": "int",
-      "params": null,
-      "scope_level": 1,
-      "first_line": 9,
-      "count": 5,
-      "is_defined": false,
-      "value": 2
-    },
-    {
-      "kind": "variable",
-      "name": "y",
-      "type": "int",
-      "params": null,
-      "scope_level": 1,
-      "first_line": 9,
-      "count": 5,
-      "is_defined": false,
-      "value": 3
-    },
-    {
-      "kind": "variable",
-      "name": "sum",
-      "type": "int",
-      "params": null,
-      "scope_level": 1,
-      "first_line": 9,
-      "count": 6,
-      "is_defined": false,
-      "value": 0
-    },
-    {
-      "kind": "variable",
-      "name": "result",
+      "name": "a",
       "type": "int",
       "params": null,
       "scope_level": 1,
@@ -95,14 +62,25 @@
     },
     {
       "kind": "variable",
-      "name": "i",
+      "name": "b",
       "type": "int",
       "params": null,
       "scope_level": 1,
-      "first_line": 18,
+      "first_line": 9,
       "count": 3,
       "is_defined": false,
-      "value": 0
+      "value": null
+    },
+    {
+      "kind": "variable",
+      "name": "c",
+      "type": "int",
+      "params": null,
+      "scope_level": 1,
+      "first_line": 9,
+      "count": 3,
+      "is_defined": false,
+      "value": null
     }
   ]
 }

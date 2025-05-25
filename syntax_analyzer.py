@@ -318,7 +318,7 @@ class SyntaxAnalyzer:
     def emit(self, op: str, a1: str, a2: Optional[str], res: str):
         """生成四元式, 并返回四元式编号"""
         idx = len(self.quads) + 100  # 从 100 开始编号
-        self.quads.append((idx, op, a1 or "-", a2 or "-", res or "-"))
+        self.quads.append((idx, op, a1 or "_", a2 or "_", res or "_"))
         return idx
 
     def next_quad(self) -> int:
@@ -427,7 +427,7 @@ class SyntaxAnalyzer:
                     or (is_type(self.current_token.type, self.current_token.value) and
                         self.peek_n().value == "main")):
                 # 进入 main 前
-                self.emit('begin', '-', '-', 'main')
+                self.emit('main', '_', '_', '_')
                 self._enter("main 函数")
                 ret_type = self.current_token.value
                 if self.current_token.type == "KEYWORD":
@@ -446,9 +446,8 @@ class SyntaxAnalyzer:
                     self.match("DELIMITER", "{")
                     self.parse_L()
                     self.match("DELIMITER", "}")
-
                     self.symtab.exit_scope()
-                    self.emit('sys', '-', '-', '-')
+                    self.emit('sys', '_', '_', '_')
                     self._exit("main 函数")
                     return
                 else:
@@ -512,7 +511,7 @@ class SyntaxAnalyzer:
             params = self.collect_params()
 
             self.match("OPERATOR", ")")
-            self.emit("begin_func", "-", "-", func_name)
+
             if self.current_token and self.current_token.type == "DELIMITER" and self.current_token.value == ";":
                 self._enter("函数声明")
                 self.symtab.add_function(name=func_name, return_type=func_type, param_types=[],
@@ -520,7 +519,7 @@ class SyntaxAnalyzer:
                 # 更新函数签名
                 self.symtab.functions[func_name].params = [f"{ptype} {pname} " for ptype, pname, _ in params]
                 self.match("DELIMITER", ";")  # 函数声明
-                self.emit("end_func", "-", "-", func_name)
+
                 self._exit("函数声明")
             elif self.current_token and self.current_token.type == "DELIMITER" and self.current_token.value == "{":
                 # 如果是函数定义则需要将函数中的参数加入符号表
@@ -530,15 +529,16 @@ class SyntaxAnalyzer:
                                                  var_type=ptype,
                                                  kind='parameter',
                                                  line=pline)
-
+                # 如果是函数定义，则需要生成函数签名
+                self.emit(func_name, "_", "_", "_")
                 self.symtab.add_function(name=func_name, return_type=func_type, param_types=[],
                                          line=self.current_token.line, is_definition=True)
                 # 更新函数签名
-                self.symtab.functions[func_name].params = [f"{ptype} {pname} " for ptype, pname, _ in params]
+                self.symtab.functions[func_name].params = [f"{pname} " for ptype, pname, _ in params]
                 self.match("DELIMITER", "{")
                 self.parse_L()
                 self.match("DELIMITER", "}")
-                self.emit("end_func", "-", "-", func_name)
+
             else:
                 self.error("Expected ';' or '{' after function signature", use_token=self.current_token)
 
@@ -716,7 +716,7 @@ class SyntaxAnalyzer:
             # 看是否存在 else 分支
             if self.current_token.type == "KEYWORD" and self.current_token.value == "else":
                 # 插入跳转语句，跳过 else，稍后回填
-                skip_else_quad = self.emit("jmp", "-", "-", "-")
+                skip_else_quad = self.emit("j", "_", "_", "_")
 
                 else_quad = self.next_quad()
                 self.backpatch(false_list, else_quad)
@@ -763,7 +763,7 @@ class SyntaxAnalyzer:
             self.parse_S()
 
             # 5. 循环体末尾无条件跳回测试
-            self.emit("jmp", "-", "-", str(loop_start))
+            self.emit("j", "_", "_", str(loop_start))
 
             # 回填 continue → 跳回 loop_start
             cont_list = self.continue_stack.pop()
@@ -824,7 +824,7 @@ class SyntaxAnalyzer:
             #    （如果 parse_ForIter 内 emit 了四元式，就已经插入了
             #     否则请在 parse_ForIter 中加入对应 emit）
             #    然后无条件跳回条件判断
-            self.emit("jmp", "-", "-", str(cond_quad))
+            self.emit("j", "_", "_", str(cond_quad))
 
             # *[新增]* 回填 continue → 跳到 cond_quad（循环条件处）
             cont_list = self.continue_stack.pop()
@@ -892,7 +892,7 @@ class SyntaxAnalyzer:
             self._enter("break语句")
             self.match("KEYWORD", "break")
             # emit 一个占位的无条件跳转，目标待回填
-            idx = self.emit("jmp", "-", "-", "-")
+            idx = self.emit("j", "_", "_", "_")
             # 收集到当前最内层循环的 break_list
 
             if self.break_stack:
@@ -906,7 +906,7 @@ class SyntaxAnalyzer:
             self._enter("continue语句")
             self.match("KEYWORD", "continue")
             # emit 一个占位的无条件跳转，目标待回填
-            idx = self.emit("jmp", "-", "-", "-")
+            idx = self.emit("j", "_", "_", "_")
             # 收集到当前最内层循环的 continue_list
 
             if self.continue_stack:
@@ -929,10 +929,10 @@ class SyntaxAnalyzer:
             # 根据是否有返回值，生成不同的四元式
             if ret_place is not None:
                 # 带返回值的 return
-                self.emit("return", ret_place, None, "-")
+                self.emit("ret", ret_place, None, "_")
             else:
                 # 无返回值的 return
-                self.emit("return", "-", None, "-")
+                self.emit("ret", "_", None, "_")
             self._exit("return语句")
             return
 
@@ -1199,7 +1199,7 @@ class SyntaxAnalyzer:
             # 生成 if-true 跳转，target 待回填
             idx_true = self.emit(f"j{op}", lp, rp, None)
             # 生成 if-false 跳转，target 待回填
-            idx_false = self.emit("jmp", None, None, None)
+            idx_false = self.emit("j", None, None, None)
             # 把 lp 更新为下一个比较左值,因为后续可能有其它表达式
             lp = rp
             # 收集 list
@@ -1255,14 +1255,15 @@ class SyntaxAnalyzer:
                     f"[Semantic Error] Division or modulo by zero at line {self.last_token.line}"
                 )
                 lv = None
-            elif lv is not None and rv is not None:
-                if op == "*":
-                    lv = lv * rv
-                elif op == "/":
-                    lv = lv / rv
-                else:
-                    lv = lv % rv
-                lp = str(lv)
+            elif lv is not None> 0 and rv is not None:
+                if isinstance(lv, (int, float)) and isinstance(rv, (int, float)):  # 确保 lv 和 rv 是数值
+                    if op == "*":
+                        lv = lv * rv
+                    elif op == "/":
+                        lv = lv / rv
+                    else:
+                        lv = lv % rv
+                    lp = str(lv)
             else:
                 lv = None
                 tmp = self.new_temp()
@@ -1316,7 +1317,7 @@ class SyntaxAnalyzer:
 
             # ② 为每个实参生成 param 四元式
             for p in arg_places:
-                self.emit("param", p, None, "-")
+                self.emit("para", p, None, "_")
             # ③ 生成 call 四元式，res 存放返回值临时变量
             tmp = self.new_temp()
             self.emit("call", name, str(len(arg_places)), tmp)
@@ -1327,7 +1328,7 @@ class SyntaxAnalyzer:
         # 括号表达式
         if tok.type == "OPERATOR" and tok.value == "(":
             self.match("OPERATOR", "(")
-            t, v, p = self.parse_B()
+            t, v, p = self.parse_E()
             self.match("OPERATOR", ")")
             self._exit("因子")
             return t, v, p

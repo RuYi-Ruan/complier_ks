@@ -1,0 +1,227 @@
+assume cs:code,ds:data,ss:stack,es:extended
+
+extended segment
+    db 1024 dup (0)
+extended ends
+
+stack segment
+    db 1024 dup (0)
+stack ends
+
+data segment
+    _buff_p db 256 dup (24h)
+    _buff_s db 256 dup (0)
+    _msg_p db 0ah, 'Output:', 0
+    _msg_s db 0ah, 'Input:', 0
+    _T1 dw 0
+    _T2 dw 0
+    _T3 dw 0
+    _T4 dw 0
+    _T5 dw 0
+    _a dw 0
+    _b dw 0
+    _c dw 0
+    _x dw 0
+    _y dw 0
+data ends
+
+code segment
+start:
+    mov ax,extended
+    mov es,ax
+    mov ax,stack
+    mov ss,ax
+    mov sp,1024
+    mov bp,sp
+    mov ax,data
+    mov ds,ax
+    jmp F_main
+
+L100:
+F_add:
+    push bp
+    mov bp, sp
+
+    ; 修复：从栈中恢复参数
+    mov ax, ss:[bp+4]
+    mov ds:[_y], ax
+    mov ax, ss:[bp+6]
+    mov ds:[_x], ax
+
+L101:
+    mov ax, ds:[_x]
+    add ax, ds:[_y]
+    mov ds:[_T1], ax
+
+L102:
+    mov ax, ds:[_T1]
+    mov sp, bp
+    pop bp
+    ret
+
+L103:
+F_main:
+    push bp
+    mov bp, sp
+
+L104:
+    call _read
+    mov ds:[_T2], ax
+
+L105:
+    mov ax, ds:[_T2]
+    mov ds:[_a], ax
+
+L106:
+    call _read
+    mov ds:[_T3], ax
+
+L107:
+    mov ax, ds:[_T3]
+    mov ds:[_b], ax
+
+L108:
+    mov ax, ds:[_a]
+    push ax
+
+L109:
+    mov ax, ds:[_b]
+    push ax
+
+L110:
+    call F_add
+    mov ds:[_T4], ax
+    add sp, 4
+
+L111:
+    mov ax, ds:[_T4]
+    mov ds:[_c], ax
+
+L112:
+    mov ax, ds:[_c]
+    push ax
+
+L113:
+    call _write
+    add sp, 2
+
+L115:
+    mov ah,4ch
+    int 21h
+
+; ----------------- READ PROCEDURE -----------------
+_read:
+    push bp
+    mov bp,sp
+    mov bx,offset _msg_s
+    call _print
+    mov bx,offset _buff_s
+    mov di,0
+_r_lp_1:
+    mov ah,1
+    int 21h
+    cmp al,0dh
+    je _r_brk_1
+    mov ds:[bx+di],al
+    inc di
+    jmp short _r_lp_1
+_r_brk_1:
+    mov ah,2
+    mov dl,0ah
+    int 21h
+    mov ax,0
+    mov si,0
+    mov cx,10
+_r_lp_2:
+    mov dl,ds:[bx+si]
+    cmp dl,30h
+    jb _r_brk_2
+    cmp dl,39h
+    ja _r_brk_2
+    sub dl,30h
+    mov ds:[bx+si],dl
+    mul cx
+    mov dl,ds:[bx+si]
+    mov dh,0
+    add ax,dx
+    inc si
+    jmp short _r_lp_2
+_r_brk_2:
+    mov cx,di
+    mov si,0
+_r_lp_3:
+    mov byte ptr ds:[bx+si],0
+    loop _r_lp_3
+    mov sp,bp
+    pop bp
+    ret
+
+; ----------------- WRITE PROCEDURE -----------------
+_write:
+    push bp
+    mov bp,sp
+    mov bx,offset _msg_p
+    call _print
+    mov ax,ss:[bp+4]
+    mov bx,10
+    mov cx,0
+_w_lp_1:
+    mov dx,0
+    div bx
+    push dx
+    inc cx
+    cmp ax,0
+    jne _w_lp_1
+    mov di,offset _buff_p
+_w_lp_2:
+    pop ax
+    add ax,30h
+    mov ds:[di],al
+    inc di
+    loop _w_lp_2
+    mov dx,offset _buff_p
+    mov ah,09h
+    int 21h
+    mov cx,di
+    sub cx,offset _buff_p
+    mov di,offset _buff_p
+_w_lp_3:
+    mov al,24h
+    mov ds:[di],al
+    inc di
+    loop _w_lp_3
+    mov ax,di
+    sub ax,offset _buff_p
+    mov sp,bp
+    pop bp
+    ret 2
+
+; ----------------- PRINT FUNCTION -----------------
+_print:
+    mov si,0
+    mov di,offset _buff_p
+_p_lp_1:
+    mov al,ds:[bx+si]
+    cmp al,0
+    je _p_brk_1
+    mov ds:[di],al
+    inc si
+    inc di
+    jmp short _p_lp_1
+_p_brk_1:
+    mov dx,offset _buff_p
+    mov ah,09h
+    int 21h
+    mov cx,si
+    mov di,offset _buff_p
+_p_lp_2:
+    mov al,24h
+    mov ds:[di],al
+    inc di
+    loop _p_lp_2
+    ret
+
+    mov ah,4ch
+    int 21h
+code ends
+end start
